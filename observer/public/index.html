@@ -1,0 +1,1018 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Agent</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/build/three.module.js",
+        "three/addons/": "/vendor/three/examples/jsm/"
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/observer.css" />
+</head>
+<body>
+  <main>
+    <div id="wrap">
+      <section class="card interface-card">
+        <div class="avatar-stage">
+          <canvas id="avatarCanvas"></canvas>
+          <div class="stage-top">
+            <div class="panel-head">
+              <div class="stage-title">
+                <h1 id="appTitle">Agent</h1>
+              </div>
+            </div>
+
+            <div class="controls stage-controls" style="grid-template-columns: 120px;">
+              <input id="sessionId" value="Main" />
+            </div>
+                <div class="voice-row">
+                  <div class="voice-button-stack">
+                    <button id="voiceToggleBtn" class="secondary" type="button">Enable voice</button>
+                    <div id="voiceTrust" class="voice-trust voice-trust-warn">Voice trust: open</div>
+                  </div>
+                  <div>
+                    <div id="voiceStatus" class="voice-status">Passive listening is off.</div>
+                    <div id="voiceMeta" class="voice-meta">No voice activity yet.</div>
+                  </div>
+                </div>
+          </div>
+          <div class="stage-overlay">
+            <div class="composer">
+              <div class="composer-pane">
+                <h3>Prompt</h3>
+                <textarea style="max-width:350px;" id="msg">Hello. Tell me 3 things you can do right now without external accounts or tools.</textarea>
+                <div style="max-width:350px;" class="attachment-row">
+                  <input id="fileInput" type="file" multiple />
+                  <div id="attachmentList" class="attachment-list micro">No files attached.</div>
+                </div>
+                <div class="prompt-actions">
+                  <button id="runBtn">Run agent</button>
+                  <button id="clearBtn" class="secondary">Clear</button>
+                </div>
+              </div>
+              <div class="composer-pane">
+                <h3>Response</h3>
+                <div id="payloads" class="payloads">
+                  <div class="payload">No run yet.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="panelDrawer" class="card panel-drawer open">
+        <div class="tab-bar" role="tablist" aria-label="Agent sections">
+          <button id="panelToggleBtn" class="tab-button drawer-toggle-button" type="button" aria-label="Toggle panel" title="Toggle panel"><span id="panelToggleIcon" class="tab-icon">X</span></button>
+          <button class="tab-button active" type="button" data-tab-target="novaTab" aria-label="Nova" title="Nova"><span class="tab-icon">N</span></button>
+          <button class="tab-button" type="button" data-tab-target="calendarTab" aria-label="Calendar" title="Calendar"><span class="tab-icon">C</span></button>
+          <button class="tab-button" type="button" data-tab-target="mailTab" aria-label="Mail" title="Mail"><span class="tab-icon">M</span></button>
+          <button class="tab-button" type="button" data-tab-target="projectsTab" aria-label="Projects" title="Projects"><span class="tab-icon">P</span></button>
+          <button class="tab-button" type="button" data-tab-target="queueTab" aria-label="Queue" title="Queue"><span class="tab-icon">Q</span></button>
+          <button class="tab-button" type="button" data-tab-target="cronTab" aria-label="Jobs" title="Jobs"><span class="tab-icon">J</span></button>
+          <button class="tab-button" type="button" data-tab-target="gatewayTab" aria-label="Gateway" title="Gateway"><span class="tab-icon">G</span></button>
+          <button class="tab-button" type="button" data-tab-target="promptsTab" aria-label="Prompts" title="Prompts"><span class="tab-icon">R</span></button>
+          <button class="tab-button" type="button" data-tab-target="brainsTab" aria-label="Brains" title="Brains"><span class="tab-icon">B</span></button>
+          <button class="tab-button" type="button" data-tab-target="secretsTab" aria-label="Secrets" title="Secrets"><span class="tab-icon">K</span></button>
+          <button class="tab-button" type="button" data-tab-target="toolsTab" aria-label="Tools" title="Tools"><span class="tab-icon">U</span></button>
+          <button class="tab-button" type="button" data-tab-target="stateTab" aria-label="State" title="State"><span class="tab-icon">S</span></button>
+          <button class="tab-button" type="button" data-tab-target="testsTab" aria-label="Tests" title="Tests"><span class="tab-icon">T</span></button>
+        </div>
+
+        <div class="drawer-content">
+        <div class="drawer-head">
+          <button id="panelCloseBtn" class="secondary" type="button">Hide panel</button>
+        </div>
+        <div id="gatewayTab" class="tab-panel">
+          <div class="tab-stack">
+            <div class="controls" style="grid-template-columns: 1fr 1fr;">
+              <button id="refreshBtn" class="secondary">Refresh runtime</button>
+              <button id="resetEventHistoryBtn" class="secondary">Reset activity feed</button>
+            </div>
+            <div class="access-summary">
+              <div class="summary-box">
+                <strong>Default access</strong>
+                <div id="internetSummary" class="summary-pill on">Enabled</div>
+                <div class="micro" id="networkSummaryText">The agent uses the internet-capable network with the standard input, workspace, and output layout.</div>
+              </div>
+              <div class="summary-box">
+                <strong>Run profile</strong>
+                <div id="profileSummary" class="summary-pill">Autonomous</div>
+                <div class="micro" id="profileSummaryText">The agent can browse the web and work within the standard input, workspace, and output layout before triage routes the request.</div>
+              </div>
+            </div>
+            <div class="toggle" style="margin-bottom: 14px;">
+              <input type="checkbox" id="forceToolUse" checked />
+              <span>
+                <strong>Require actual tool use</strong>
+                <div class="micro">The agent should use web/file access where appropriate instead of answering from general knowledge alone.</div>
+              </span>
+            </div>
+            <div class="toggle" style="margin-bottom: 14px;">
+              <input type="checkbox" id="requireWorkerPreflight" />
+              <span>
+                <strong>Require worker preflight</strong>
+                <div class="micro">Before a worker starts, validate that the request is coherent, optimize it, or ask a clarification question instead of guessing.</div>
+              </span>
+            </div>
+            <section class="status-strip">
+              <div class="card">
+                <div class="metric-label">Gateway</div>
+                <div id="gatewayStatus" class="metric-value">Checking...</div>
+              </div>
+              <div class="card">
+                <div class="metric-label">Ollama</div>
+                <div id="ollamaStatus" class="metric-value">Checking...</div>
+              </div>
+              <div class="card">
+                <div class="metric-label">Qdrant</div>
+                <div id="qdrantStatus" class="metric-value">Checking...</div>
+                <div id="qdrantDetails" class="micro">Waiting for retrieval status...</div>
+              </div>
+              <div class="card">
+                <div class="metric-label">GPU</div>
+                <div id="gpuStatus" class="metric-value">Checking...</div>
+              </div>
+              <div class="card">
+                <div class="metric-label">Last check</div>
+                <div id="checkedAt" class="metric-value">Pending</div>
+              </div>
+            </section>
+            <section class="brain-editor-card">
+              <div class="panel-head compact">
+                <div>
+                  <h2>Latest run</h2>
+                  <div class="panel-subtle">Current run state, raw response payload, and transport hinting.</div>
+                </div>
+              </div>
+              <div class="run-meta">
+                <div class="mini"><strong>Run status</strong><span id="runStatus">Idle</span></div>
+                <div class="mini"><strong>Brain</strong><span id="runBrain">bitnet</span></div>
+                <div class="mini"><strong>Model</strong><span id="runModel">-</span></div>
+                <div class="mini"><strong>Duration</strong><span id="runDuration">-</span></div>
+              </div>
+              <div>
+                <div class="result-head">
+                  <h3>Raw response</h3>
+                  <div class="micro" id="resultAudit">Tool-required mode is on.</div>
+                </div>
+                <details>
+                  <summary>Show raw JSON</summary>
+                  <pre id="result" class="json-box"></pre>
+                </details>
+              </div>
+              <div class="hint" id="hint">The gateway, Ollama, and Qdrant status cards are live. If a run fails, check the logs panel and container health first.</div>
+            </section>
+            <section class="panel-block">
+              <div class="panel-head compact">
+                <div>
+                  <h2>Remote brains</h2>
+                  <div class="panel-subtle">Remote Ollama endpoint health and attached brains</div>
+                </div>
+              </div>
+              <div id="remoteBrainStatus" class="remote-status-grid">
+                <div class="panel-subtle">Checking remote endpoints...</div>
+              </div>
+            </section>
+            <section class="panel-block">
+              <div class="panel-head compact">
+                <div>
+                  <h2>Brain load</h2>
+                  <div class="panel-subtle">Live activity and idle capacity across local and remote brains</div>
+                </div>
+              </div>
+              <div id="brainLoadStatus" class="brain-load-grid">
+                <div class="panel-subtle">Checking brain activity...</div>
+              </div>
+            </section>
+            <div class="panel-head">
+              <div>
+                <h2>Gateway logs</h2>
+                <div class="panel-subtle">Streaming local observer runtime events</div>
+              </div>
+            </div>
+            <pre id="logs" class="logs"></pre>
+          </div>
+        </div>
+
+        <div id="queueTab" class="tab-panel">
+          <div class="queue-grid">
+            <div class="toggle">
+              <input type="checkbox" id="queueHandoff" checked />
+              <span>
+                <strong>Use task queue for requests</strong>
+                <div class="micro">Requests enter through CPU intake, then Qwen Worker executes queued tool work.</div>
+              </span>
+            </div>
+            <div class="queue-controls">
+              <div class="micro" id="queueSummary">Queue not loaded yet.</div>
+              <button id="dispatchNextBtn" class="secondary">Dispatch next</button>
+              <button id="refreshQueueBtn" class="secondary">Refresh queue</button>
+            </div>
+            <div class="queue-subtab-bar" role="tablist" aria-label="Queue categories">
+              <button class="queue-subtab-button active" type="button" data-queue-subtab-target="taskQueueQueuedPanel">Queued <span id="taskQueueQueuedCount" class="queue-tab-count">0</span></button>
+              <button class="queue-subtab-button" type="button" data-queue-subtab-target="taskQueueInProgressPanel">In progress <span id="taskQueueInProgressCount" class="queue-tab-count">0</span></button>
+              <button class="queue-subtab-button" type="button" data-queue-subtab-target="taskQueueDonePanel">Done <span id="taskQueueDoneCount" class="queue-tab-count">0</span></button>
+              <button class="queue-subtab-button" type="button" data-queue-subtab-target="taskQueueFailedPanel">Failed <span id="taskQueueFailedCount" class="queue-tab-count">0</span></button>
+              <button class="queue-subtab-button" type="button" data-queue-subtab-target="taskQueueIssuesPanel">Issues <span id="taskQueueIssuesCount" class="queue-tab-count">0</span></button>
+            </div>
+            <div class="queue-panels">
+              <div id="taskQueueQueuedPanel" class="queue-panel active">
+                <div class="queue-column">
+                  <h3>Queued</h3>
+                  <div id="taskQueueQueued">Loading...</div>
+                </div>
+              </div>
+              <div id="taskQueueInProgressPanel" class="queue-panel">
+                <div class="queue-column">
+                  <h3>In progress</h3>
+                  <div id="taskQueueInProgress">Loading...</div>
+                </div>
+              </div>
+              <div id="taskQueueDonePanel" class="queue-panel">
+                <div class="queue-column">
+                  <h3>Done</h3>
+                  <div id="taskQueueDone">Loading...</div>
+                </div>
+              </div>
+              <div id="taskQueueFailedPanel" class="queue-panel">
+                <div class="queue-column">
+                  <h3>Failed</h3>
+                  <div id="taskQueueFailed">Loading...</div>
+                </div>
+              </div>
+              <div id="taskQueueIssuesPanel" class="queue-panel">
+                <section class="queue-issues-panel">
+                  <div class="panel-head compact">
+                    <div>
+                      <h3>Recurring issues</h3>
+                      <div id="taskReshapeIssuesSummary" class="panel-subtle">Loading reshape issue summary...</div>
+                    </div>
+                    <button id="resetTaskReshapeIssuesBtn" class="secondary" type="button">Reset issues</button>
+                  </div>
+                  <div id="taskReshapeIssuesList" class="queue-issues-list">
+                    <div class="panel-subtle">Loading recurring issues...</div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="promptsTab" class="tab-panel">
+          <div class="tab-stack">
+            <div class="panel-head">
+              <div>
+                <h2>Prompt Review</h2>
+                <div class="panel-subtle">Live constructed instruction sets for intake and each worker brain.</div>
+              </div>
+              <button id="refreshPromptReviewBtn" class="secondary" type="button">Refresh prompts</button>
+            </div>
+            <div class="hint" id="promptReviewHint">Loading prompt review...</div>
+            <div id="promptReviewList" class="prompt-review-list">
+              <div class="panel-subtle">Loading prompt review...</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="novaTab" class="tab-panel active">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Nova</h2>
+                <div class="panel-subtle">Set Nova's identity and appearance without editing config files by hand.</div>
+              </div>
+              <div class="controls" style="grid-template-columns: 1fr 1fr; margin-bottom: 0;">
+                <button id="refreshNovaBtn" class="secondary">Refresh Nova</button>
+                <button id="saveNovaBtn">Save Nova</button>
+              </div>
+            </div>
+            <div class="hint" id="novaHint">Loading Nova settings...</div>
+
+            <div class="nova-subtab-bar" role="tablist" aria-label="Nova configuration sections">
+              <button class="nova-subtab-button active" type="button" data-nova-subtab-target="novaIdentityPanel">Identity</button>
+              <button class="nova-subtab-button" type="button" data-nova-subtab-target="novaQuestionsPanel">Questions <span id="novaQuestionsCount" class="queue-tab-count">0</span></button>
+              <button class="nova-subtab-button" type="button" data-nova-subtab-target="novaTrustPanel">Trust</button>
+              <button class="nova-subtab-button" type="button" data-nova-subtab-target="novaEnvironmentPanel">Environment</button>
+              <button class="nova-subtab-button" type="button" data-nova-subtab-target="novaPropsPanel">Props</button>
+            </div>
+
+            <section id="novaIdentityPanel" class="nova-subtab-panel active">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Identity</h3>
+                    <div class="panel-subtle">Name and voice preferences used by the UI and speech output.</div>
+                  </div>
+                </div>
+                <div id="novaIdentitySettingsList" class="stack-list">Loading Nova settings...</div>
+              </div>
+            </section>
+
+            <section id="novaEnvironmentPanel" class="nova-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Environment</h3>
+                    <div class="panel-subtle">Background, filters, and room textures around Nova.</div>
+                  </div>
+                </div>
+                <div id="novaEnvironmentSettingsList" class="stack-list">Loading Nova settings...</div>
+              </div>
+            </section>
+
+            <section id="novaQuestionsPanel" class="nova-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Questions</h3>
+                    <div class="panel-subtle">Waiting questions that still need your direction.</div>
+                  </div>
+                  <button id="questionTimeBtn" class="secondary" type="button">Question time</button>
+                </div>
+                <div id="taskQueueWaiting">Loading...</div>
+              </div>
+            </section>
+
+            <section id="novaTrustPanel" class="nova-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Trust</h3>
+                    <div class="panel-subtle">Manage unified trust records that can include both email matching and captured voice patterns.</div>
+                  </div>
+                </div>
+                <div id="novaTrustSettingsList" class="stack-list">Loading Nova settings...</div>
+              </div>
+            </section>
+
+            <section id="novaPropsPanel" class="nova-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Props</h3>
+                    <div class="panel-subtle">Assign prop models to the room and stage positions.</div>
+                  </div>
+                </div>
+                <div id="novaPropsSettingsList" class="stack-list">Loading Nova settings...</div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div id="brainsTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Brain Network</h2>
+                <div class="panel-subtle">Manage remote endpoints, planner CPU, specialists, and routing without editing JSON by hand.</div>
+              </div>
+              <div class="controls" style="grid-template-columns: 1fr 1fr; margin-bottom: 0;">
+                <button id="refreshBrainsBtn" class="secondary">Refresh brains</button>
+                <button id="saveBrainsBtn">Save brains</button>
+              </div>
+            </div>
+            <div class="hint" id="brainsHint">Loading brain configuration...</div>
+
+            <div class="brain-subtab-bar" role="tablist" aria-label="Brain configuration sections">
+              <button class="brain-subtab-button active" type="button" data-brain-subtab-target="brainsEndpointsPanel">Endpoints</button>
+              <button class="brain-subtab-button" type="button" data-brain-subtab-target="brainsAssignmentsPanel">Base Brains</button>
+              <button class="brain-subtab-button" type="button" data-brain-subtab-target="brainsSpecialistsPanel">Specialists</button>
+              <button class="brain-subtab-button" type="button" data-brain-subtab-target="brainsRoutingPanel">Routing</button>
+            </div>
+
+            <section id="brainsEndpointsPanel" class="brain-subtab-panel active">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Endpoints</h3>
+                    <div class="panel-subtle">Ollama hosts Nova can reach.</div>
+                  </div>
+                  <button id="addBrainEndpointBtn" class="secondary" type="button">Add endpoint</button>
+                </div>
+                <div id="brainEndpointsList" class="stack-list">Loading endpoints...</div>
+              </div>
+            </section>
+
+            <section id="brainsAssignmentsPanel" class="brain-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Base Brains</h3>
+                    <div class="panel-subtle">Choose where the built-in brains run.</div>
+                  </div>
+                </div>
+                <div id="brainAssignmentsList" class="stack-list">Loading assignments...</div>
+              </div>
+            </section>
+
+            <section id="brainsSpecialistsPanel" class="brain-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Specialists</h3>
+                    <div class="panel-subtle">Define remote CPU planners and worker specialists.</div>
+                  </div>
+                  <button id="addCustomBrainBtn" class="secondary" type="button">Add specialist</button>
+                </div>
+                <div id="customBrainsList" class="stack-list">Loading specialists...</div>
+              </section>
+            </section>
+
+            <section id="brainsRoutingPanel" class="brain-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Routing</h3>
+                    <div class="panel-subtle">Select the planner CPU and specialist order for each task type.</div>
+                  </div>
+                </div>
+                <div class="brain-routing-grid">
+                  <label class="toggle">
+                    <input type="checkbox" id="routingEnabledToggle" />
+                    <span>
+                      <strong>Enable remote routing</strong>
+                      <div class="micro">If off, Nova stays on the local path.</div>
+                    </span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" id="remoteParallelToggle" />
+                    <span>
+                      <strong>Allow remote parallel lanes</strong>
+                      <div class="micro">Local and remote workers can run together.</div>
+                    </span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" id="escalationEnabledToggle" />
+                    <span>
+                      <strong>Enable escalation review</strong>
+                      <div class="micro">Retry failed work through planner review.</div>
+                    </span>
+                  </label>
+                  <label class="stack-field">
+                    <span class="micro">Remote planner CPU</span>
+                    <select id="remotePlannerSelect"></select>
+                  </label>
+                  <label class="stack-field">
+                    <span class="micro">Fallback attempts</span>
+                    <input id="routingFallbackAttempts" type="number" min="0" max="4" step="1" value="2" />
+                  </label>
+                </div>
+                <div id="routingMapList" class="stack-list">Loading routing map...</div>
+              </section>
+            </section>
+          </div>
+        </div>
+
+        <div id="secretsTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Secrets</h2>
+                <div class="panel-subtle">Secure keystore status and secret management for mail, WordPress, retrieval, and custom handles.</div>
+              </div>
+              <div class="controls" style="grid-template-columns: 1fr; margin-bottom: 0;">
+                <button id="refreshSecretsBtn" class="secondary">Refresh secrets</button>
+              </div>
+            </div>
+            <div class="hint" id="secretsHint">Loading secure keystore status...</div>
+
+            <div class="secrets-subtab-bar" role="tablist" aria-label="Secrets sections">
+              <button class="secrets-subtab-button active" type="button" data-secrets-subtab-target="secretsOverviewPanel">Overview</button>
+              <button class="secrets-subtab-button" type="button" data-secrets-subtab-target="secretsMailPanel">Mail</button>
+              <button class="secrets-subtab-button" type="button" data-secrets-subtab-target="secretsWordPressPanel">WordPress</button>
+              <button class="secrets-subtab-button" type="button" data-secrets-subtab-target="secretsRetrievalPanel">Retrieval</button>
+              <button class="secrets-subtab-button" type="button" data-secrets-subtab-target="secretsCustomPanel">Custom</button>
+            </div>
+
+            <section id="secretsOverviewPanel" class="secrets-subtab-panel active">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Coverage</h3>
+                    <div class="panel-subtle">Current keystore adoption and quick integration summary.</div>
+                  </div>
+                </div>
+                <div id="secretsOverviewList" class="stack-list">Loading secure keystore status...</div>
+              </div>
+            </section>
+
+            <section id="secretsMailPanel" class="secrets-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Mail Agent Passwords</h3>
+                    <div class="panel-subtle">Store IMAP/SMTP passwords per mail agent without writing them into config.</div>
+                  </div>
+                </div>
+                <div id="secretsMailList" class="stack-list">Loading mail secrets...</div>
+              </div>
+            </section>
+
+            <section id="secretsWordPressPanel" class="secrets-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>WordPress Bridge Secrets</h3>
+                    <div class="panel-subtle">Per-site shared secrets used by the Nova WordPress bridge.</div>
+                  </div>
+                </div>
+                <div id="secretsWordPressList" class="stack-list">Loading WordPress secrets...</div>
+              </div>
+            </section>
+
+            <section id="secretsRetrievalPanel" class="secrets-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Retrieval / Qdrant</h3>
+                    <div class="panel-subtle">Secure API key storage for retrieval indexing and semantic search.</div>
+                  </div>
+                </div>
+                <div id="secretsRetrievalList" class="stack-list">Loading retrieval secrets...</div>
+              </div>
+            </section>
+
+            <section id="secretsCustomPanel" class="secrets-subtab-panel">
+              <div class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Custom Handle</h3>
+                    <div class="panel-subtle">Inspect, set, or clear any keystore handle directly.</div>
+                  </div>
+                </div>
+                <div id="secretsCustomList" class="stack-list">Loading custom handle tools...</div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div id="toolsTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Tools</h2>
+                <div class="panel-subtle">Control which tools Nova may use autonomously, and approve installed skills as active guidance.</div>
+              </div>
+              <div class="controls" style="grid-template-columns: 1fr 1fr; margin-bottom: 0;">
+                <button id="refreshToolsBtn" class="secondary">Refresh tools</button>
+                <button id="saveToolsBtn">Save tools</button>
+              </div>
+            </div>
+            <div class="hint" id="toolsHint">Loading tool configuration...</div>
+
+            <section class="brain-editor-card">
+              <div class="panel-head">
+                <div>
+                  <h3>Built-in Tools</h3>
+                  <div class="panel-subtle">Autonomous tool access for intake and worker tool loops.</div>
+                </div>
+              </div>
+              <div id="toolCatalogList" class="stack-list">Loading tools...</div>
+            </section>
+
+            <section class="brain-editor-card">
+              <div class="panel-head">
+                <div>
+                  <h3>Installed Skills</h3>
+                  <div class="panel-subtle">Approve installed skills before Nova treats them as active operational guidance.</div>
+                </div>
+              </div>
+              <div id="installedSkillsList" class="stack-list">Loading installed skills...</div>
+            </section>
+
+            <section class="brain-editor-card">
+              <div class="panel-head">
+                <div>
+                  <h3>Capability Requests</h3>
+                  <div class="panel-subtle">Requests captured when a worker finds a missing skill install or built-in tool capability.</div>
+                </div>
+              </div>
+              <div id="capabilityRequestsList" class="stack-list">Loading capability requests...</div>
+            </section>
+          </div>
+        </div>
+
+        <div id="projectsTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Projects</h2>
+                <div class="panel-subtle">Project-cycle settings, workspace rotation behavior, and live project execution details.</div>
+              </div>
+              <div class="projects-actions">
+                <button id="refreshProjectsBtn" class="secondary">Refresh projects</button>
+                <button id="saveProjectsBtn">Save projects</button>
+              </div>
+            </div>
+            <div class="hint" id="projectsHint">Loading project configuration...</div>
+
+            <div class="projects-subtab-bar" role="tablist" aria-label="Project sections">
+              <button class="projects-subtab-button active" type="button" data-projects-subtab-target="projectsOverviewPanel">Projects</button>
+              <button class="projects-subtab-button" type="button" data-projects-subtab-target="projectsCompletedPanel">Completed</button>
+              <button class="projects-subtab-button" type="button" data-projects-subtab-target="projectsStatePanel">State</button>
+              <button class="projects-subtab-button" type="button" data-projects-subtab-target="projectsSettingsPanel">Settings</button>
+              <button class="projects-subtab-button" type="button" data-projects-subtab-target="projectsPoliciesPanel">Imports / Policies</button>
+            </div>
+
+            <section id="projectsOverviewPanel" class="projects-subtab-panel active">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Projects</h3>
+                    <div class="panel-subtle">Complete project overviews with checklist status, role report cards, active work, and history.</div>
+                  </div>
+                </div>
+                <div class="projects-overview-controls">
+                  <label class="stack-field">
+                    <strong>Project</strong>
+                    <select id="projectsOverviewSelect">
+                      <option value="">Loading projects...</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="projectsOverviewList" class="projects-overview-list">Loading project overviews...</div>
+              </section>
+            </section>
+
+            <section id="projectsCompletedPanel" class="projects-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Completed Jobs</h3>
+                    <div class="panel-subtle">Finished and exported project-cycle jobs remain visible here after workspace rotation continues.</div>
+                  </div>
+                </div>
+                <div id="projectsCompletedList" class="projects-overview-list">Loading completed project jobs...</div>
+              </section>
+            </section>
+
+            <section id="projectsStatePanel" class="projects-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Live State</h3>
+                    <div class="panel-subtle">Current workspace projects, active project tasks, and recent project failures.</div>
+                  </div>
+                </div>
+                <div id="projectsStateSummary" class="access-summary projects-summary-stack">
+                  <div class="panel-subtle">Loading project state...</div>
+                </div>
+                <div class="projects-state-grid">
+                  <div class="brain-editor-card">
+                    <strong>Workspace Projects</strong>
+                    <div id="projectsWorkspaceList" class="stack-list micro">Loading...</div>
+                  </div>
+                  <div class="brain-editor-card">
+                    <strong>Active Project Tasks</strong>
+                    <div id="projectsActiveTasksList" class="stack-list micro">Loading...</div>
+                  </div>
+                  <div class="brain-editor-card">
+                    <strong>Recent Project Failures</strong>
+                    <div id="projectsFailuresList" class="stack-list micro">Loading...</div>
+                  </div>
+                </div>
+              </section>
+            </section>
+
+            <section id="projectsSettingsPanel" class="projects-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Settings</h3>
+                    <div class="panel-subtle">Editable operational knobs for project-cycle work and workspace rotation.</div>
+                  </div>
+                </div>
+                <div id="projectsSettingsList" class="stack-list">Loading project settings...</div>
+              </section>
+            </section>
+
+            <section id="projectsPoliciesPanel" class="projects-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head">
+                  <div>
+                    <h3>Imports / Policies</h3>
+                    <div class="panel-subtle">Recent imports, role playbooks, and fixed project policies.</div>
+                  </div>
+                </div>
+                <div id="projectsPoliciesList" class="stack-list micro">Loading...</div>
+              </section>
+            </section>
+          </div>
+        </div>
+
+        <div id="cronTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Jobs</h2>
+                <div class="panel-subtle">Create recurring jobs for the worker and review completed run history.</div>
+              </div>
+            </div>
+
+            <div class="jobs-subtab-bar" role="tablist" aria-label="Jobs sections">
+              <button class="jobs-subtab-button active" type="button" data-jobs-subtab-target="jobsSchedulesPanel">Schedules</button>
+              <button class="jobs-subtab-button" type="button" data-jobs-subtab-target="jobsHistoryPanel">History</button>
+            </div>
+
+            <section id="jobsSchedulesPanel" class="jobs-subtab-panel active">
+              <div class="jobs-queue-controls">
+                <div>
+                  <div class="micro" id="jobsQueueState">Queue state: loading...</div>
+                  <div class="panel-subtle">Pausing stops new queued jobs from starting. Current work keeps running.</div>
+                </div>
+                <div class="jobs-queue-actions">
+                  <button id="pauseQueueBtn" class="secondary" type="button">Pause queue</button>
+                  <button id="resumeQueueBtn" class="secondary" type="button">Restart queue</button>
+                </div>
+              </div>
+
+              <div class="controls">
+                <input id="cronName" placeholder="Job name" />
+                <select id="cronBrainSelect"></select>
+                <input id="cronEvery" value="24h" placeholder="24h, 2h, 30m" />
+                <button id="cronAddBtn" class="secondary">Create schedule</button>
+              </div>
+              <textarea id="cronMessage" placeholder="What should this job do?">Summarize important unread emails from the mounted inboxes and append the results to memory/YYYY-MM-DD.md.</textarea>
+              <div class="hint" id="cronHint">Scheduled tasks requeue themselves after each periodic run.</div>
+              <div id="cronList" class="cron-list">Loading scheduled tasks...</div>
+            </section>
+
+            <section id="jobsHistoryPanel" class="jobs-subtab-panel">
+              <div id="historyList" class="history-list">No history yet.</div>
+            </section>
+          </div>
+        </div>
+
+        <div id="calendarTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Calendar</h2>
+                <div class="panel-subtle">Personal events and Nova-run actions on specific dates.</div>
+              </div>
+              <div class="projects-actions">
+                <button id="calendarTodayBtn" class="secondary">Today</button>
+                <button id="calendarRefreshBtn" class="secondary">Refresh</button>
+                <button id="calendarNewBtn">New event</button>
+              </div>
+            </div>
+            <div class="hint" id="calendarHint">Loading calendar...</div>
+
+            <div class="calendar-subtab-bar" role="tablist" aria-label="Calendar views">
+              <button class="calendar-subtab-button active" type="button" data-calendar-subtab-target="calendarDailyPanel">Daily</button>
+              <button class="calendar-subtab-button" type="button" data-calendar-subtab-target="calendarMonthlyPanel">Monthly</button>
+              <button class="calendar-subtab-button" type="button" data-calendar-subtab-target="calendarEditPanel">Edit</button>
+              <button class="calendar-subtab-button" type="button" data-calendar-subtab-target="calendarTodoPanel">To do <span id="calendarTodoCount" class="queue-tab-count">0</span></button>
+            </div>
+
+            <div class="calendar-subtab-panels">
+              <div id="calendarDailyPanel" class="calendar-subtab-panel active">
+                <section class="brain-editor-card">
+                  <div class="panel-head">
+                    <div>
+                      <h3 id="calendarDayHeading">Agenda</h3>
+                      <div class="panel-subtle">Daily agenda.</div>
+                    </div>
+                  </div>
+                  <div id="calendarDaySummary" class="micro">No day selected.</div>
+                  <div id="calendarDayEvents" class="stack-list micro">No events yet.</div>
+                </section>
+              </div>
+
+              <div id="calendarMonthlyPanel" class="calendar-subtab-panel">
+                <section class="brain-editor-card">
+                  <div class="calendar-toolbar">
+                    <button id="calendarPrevBtn" class="secondary" type="button">Previous</button>
+                    <div id="calendarMonthLabel" class="calendar-month-label">Month</div>
+                    <button id="calendarNextBtn" class="secondary" type="button">Next</button>
+                  </div>
+                  <div class="calendar-weekdays">
+                    <div>Sun</div>
+                    <div>Mon</div>
+                    <div>Tue</div>
+                    <div>Wed</div>
+                    <div>Thu</div>
+                    <div>Fri</div>
+                    <div>Sat</div>
+                  </div>
+                  <div id="calendarMonthGrid" class="calendar-grid">Loading...</div>
+                </section>
+              </div>
+
+              <div id="calendarEditPanel" class="calendar-subtab-panel">
+                <section class="brain-editor-card">
+                  <div class="panel-head">
+                    <div>
+                      <h3>Event Editor</h3>
+                      <div class="panel-subtle">Create, edit, cancel, complete, or delete events.</div>
+                    </div>
+                  </div>
+                  <div class="controls">
+                    <input id="calendarTitle" placeholder="Event title" />
+                    <select id="calendarType">
+                      <option value="personal">Personal</option>
+                      <option value="nova_action">Nova action</option>
+                    </select>
+                  </div>
+                  <div class="controls">
+                    <input id="calendarStartAt" type="datetime-local" />
+                    <input id="calendarEndAt" type="datetime-local" />
+                  </div>
+                  <div class="controls">
+                    <label class="toggle">
+                      <input id="calendarAllDay" type="checkbox" />
+                      <span><strong>All day</strong></span>
+                    </label>
+                    <input id="calendarLocation" placeholder="Location" />
+                  </div>
+                  <textarea id="calendarDescription" placeholder="Notes, agenda, or details"></textarea>
+                  <div class="controls">
+                    <select id="calendarRepeatFrequency">
+                      <option value="none">Does not repeat</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="yearly">Yearly</option>
+                    </select>
+                    <input id="calendarRepeatInterval" type="number" min="1" max="365" value="1" />
+                  </div>
+                  <div class="controls">
+                    <label class="toggle">
+                      <input id="calendarActionEnabled" type="checkbox" />
+                      <span>
+                        <strong>Queue Nova action</strong>
+                        <div class="micro">When the event becomes due, Nova can run a queued task.</div>
+                      </span>
+                    </label>
+                    <select id="calendarActionBrain"></select>
+                  </div>
+                  <textarea id="calendarActionMessage" placeholder="What should Nova do for this event?"></textarea>
+                  <div class="controls">
+                    <button id="calendarSaveBtn">Save event</button>
+                    <button id="calendarCompleteBtn" class="secondary" type="button">Mark complete</button>
+                    <button id="calendarCancelBtn" class="secondary" type="button">Cancel</button>
+                    <button id="calendarDeleteBtn" class="secondary" type="button">Delete</button>
+                  </div>
+                </section>
+              </div>
+
+              <div id="calendarTodoPanel" class="calendar-subtab-panel">
+                <section class="brain-editor-card">
+                  <div class="panel-head">
+                    <div>
+                      <h3>To do</h3>
+                      <div class="panel-subtle">Shared personal backlog for you and Nova.</div>
+                    </div>
+                  </div>
+                  <div class="todo-compose">
+                    <textarea id="todoInput" class="queue-answer-input" rows="2" placeholder="Add a personal backlog item"></textarea>
+                    <div class="queue-item-actions">
+                      <button id="todoAddBtn" type="button">Add item</button>
+                    </div>
+                  </div>
+                  <div id="todoHint" class="panel-subtle">Loading to do list...</div>
+                  <div class="todo-section">
+                    <strong>Open</strong>
+                    <div id="todoOpenList" class="todo-list">Loading...</div>
+                  </div>
+                  <div class="todo-section">
+                    <strong>Completed</strong>
+                    <div id="todoCompletedList" class="todo-list">Loading...</div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="mailTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Agent Mail</h2>
+                <div class="panel-subtle">IMAP inbox polling and SMTP handoff for agent-to-agent messages.</div>
+              </div>
+              <button id="mailPollBtn" class="secondary">Poll inbox</button>
+            </div>
+
+              <div class="run-meta mail-info-strip">
+                <div class="mini"><strong>Mailbox</strong><span id="mailStatus">Checking</span></div>
+                <div class="mini"><strong>Agent</strong><span id="mailAgent">-</span></div>
+                <div class="mini"><strong>Destination</strong><span id="mailDestinationSummary">-</span></div>
+                <div class="mini"><strong>Last check</strong><span id="mailCheckedAt">-</span></div>
+              </div>
+
+            <div class="hint" id="mailHint">Configure the active agent mailbox and store its password in the Nova secure keystore to enable polling.</div>
+
+            <label class="toggle" style="margin-bottom: 10px;">
+              <input type="checkbox" id="mailSummariesEnabled" checked />
+              <span>
+                <strong>Send email summaries</strong>
+                <div class="micro">Controls whether Nova sends the unsure-email summary digests.</div>
+              </span>
+            </label>
+
+            <div class="controls">
+              <input id="mailToEmail" placeholder="name@example.com" />
+              <input id="mailSubject" placeholder="Subject" />
+              <button id="mailSendBtn" class="secondary">Send</button>
+            </div>
+            <textarea id="mailBody" placeholder="Write an email message."></textarea>
+
+            <div id="mailMessages" class="history-list mail-message-list">No mail messages yet.</div>
+          </div>
+        </div>
+
+        <div id="testsTab" class="tab-panel">
+          <div class="inspector">
+            <div class="panel-head">
+              <div>
+                <h2>Regression Tests</h2>
+                <div class="panel-subtle">Run the intake, planner, and local worker suites against the live observer.</div>
+              </div>
+              <div class="controls" style="grid-template-columns: 1fr 1fr; margin-bottom: 0;">
+                <button id="refreshRegressionBtn" class="secondary">Refresh suites</button>
+                <button id="runAllRegressionsBtn">Run all</button>
+              </div>
+            </div>
+            <div class="hint" id="regressionHint">Loading regression suites...</div>
+            <div id="regressionSuiteList" class="stack-list">Loading regression suites...</div>
+            <div class="panel-head compact">
+              <div>
+                <h3>Command path</h3>
+                <div class="panel-subtle">Run the same regression path from PowerShell against the live observer API.</div>
+              </div>
+              <div class="controls" style="grid-template-columns: minmax(0, 1fr) auto; margin-bottom: 0;">
+                <select id="regressionCommandSuiteSelect"></select>
+                <button id="copyRegressionCommandBtn" class="secondary">Copy command</button>
+              </div>
+            </div>
+            <div class="hint" id="regressionCommandHint">Preparing terminal command...</div>
+            <pre id="regressionCommandLine" class="json-box">node openclaw-observer/run-regressions.js --suite 'all'</pre>
+            <div class="panel-head compact">
+              <div>
+                <h3>Latest run</h3>
+                <div class="panel-subtle">Most recent persisted regression report.</div>
+              </div>
+            </div>
+            <div id="regressionResults" class="history-list">No regression results yet.</div>
+          </div>
+        </div>
+
+
+
+        <div id="stateTab" class="tab-panel">
+            <div class="inspector">
+              <div class="panel-head">
+                <div>
+                  <h2>Internal state</h2>
+                  <div class="panel-subtle">Browse the container workspace, queue state, runtime data, memory files, output, config, and public UI files.</div>
+                </div>
+              </div>
+
+            <div class="inspector-controls">
+              <select id="scopeSelect">
+                <option value="workspace">Workspace</option>
+                <option value="queue">Queue</option>
+                <option value="runtime">Runtime</option>
+                <option value="memory">Memory</option>
+                <option value="output">Output</option>
+                <option value="config">Config</option>
+                <option value="public">Public UI</option>
+                <option value="taskfiles">Task files</option>
+              </select>
+              <input id="selectedFile" placeholder="Select a file below" readonly />
+              <button id="reloadFilesBtn" class="secondary">Reload files</button>
+              <button id="resetSimpleStateBtn" class="secondary" type="button">Reset to simple start</button>
+            </div>
+            <div id="stateResetHint" class="hint state-reset-status">Reset Nova's internal project state, logs, and input/output folders to one simple checkbox project.</div>
+
+            <div id="stateFileBrowser">
+              <div id="fileList" class="file-list"></div>
+              <pre id="fileContent" class="file-view">Select a file to inspect.</pre>
+            </div>
+            <div id="stateTaskFilesBrowser" hidden>
+              <div class="panel-subtle" style="margin-bottom: 10px;">Direct view of the observer queue JSON files in `observer-task-queue/`.</div>
+              <div id="taskFilesList" class="file-list">Loading task files...</div>
+              <pre id="taskFileContent" class="file-view">Select a task file to inspect.</pre>
+            </div>
+          </div>
+        </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module" src="/avatar.js"></script>
+  <script src="/observer.core.js"></script>
+  <script src="/observer.voice.js"></script>
+  <script src="/observer.render.js"></script>
+  <script src="/observer.runtime.js"></script>
+  <script src="/observer.js"></script>
+</body>
+</html>

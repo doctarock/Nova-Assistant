@@ -1,0 +1,131 @@
+{
+  "checkVerb": [
+    "check",
+    "look over",
+    "go over",
+    "dig into"
+  ],
+  "readyVerb": [
+    "getting",
+    "setting",
+    "lining",
+    "teeing"
+  ],
+  "readyTail": [
+    "ready now",
+    "up now",
+    "in motion now",
+    "sorted now"
+  ],
+  "handoffVerb": [
+    "hand",
+    "pass",
+    "send",
+    "move"
+  ],
+  "handoffTail": [
+    "for a closer look",
+    "for a deeper pass",
+    "for a proper look",
+    "for the next pass"
+  ],
+  "sendVerb": [
+    "send",
+    "hand",
+    "move"
+  ],
+  "completionVerb": [
+    "finished",
+    "wrapped up",
+    "closed out",
+    "cleared"
+  ],
+  "completionState": [
+    "done",
+    "sorted",
+    "settled"
+  ],
+  "issueVerb": [
+    "ran into a problem with",
+    "hit an issue with",
+    "ran aground on",
+    "got tangled up in"
+  ],
+  "issueTail": [
+    "didn't come through cleanly",
+    "didn't close out properly",
+    "stalled before the finish",
+    "fell over before I could finish it"
+  ],
+  "recoveryVerb": [
+    "picking",
+    "pulling",
+    "bringing"
+  ],
+  "recoveryTail": [
+    "back up",
+    "back into motion",
+    "back through the line"
+  ],
+  "recoveryDetail": [
+    "It had stalled, so I restarted it.",
+    "It drifted, so I pulled it back in.",
+    "It got stuck in the pipe, so I kicked it loose."
+  ],
+  "escalateVerb": [
+    "handing",
+    "moving",
+    "sending"
+  ],
+  "escalateTail": [
+    "up for a deeper pass",
+    "up for a closer look",
+    "to a stronger brain"
+  ],
+  "nextTail": [
+    "is next up",
+    "takes it from here",
+    "has the next pass"
+  ],
+  "workingVerb": [
+    "working on",
+    "still on",
+    "in the middle of",
+    "staying with"
+  ],
+  "fastDetail": [
+    "I am fast tracking this one.",
+    "This one is moving quickly.",
+    "I'm keeping this one moving."
+  ],
+  "slowDetail": [
+    "This may take some time.",
+    "This one needs a little more time.",
+    "This is taking a bit more digging."
+  ],
+  "queueVerb": [
+    "queued",
+    "lined up",
+    "set aside"
+  ],
+  "queueState": [
+    "queued",
+    "lined up",
+    "in the queue"
+  ],
+  "queueTail": [
+    "next",
+    "from there",
+    "on the next pass"
+  ],
+  "listenVerb": [
+    "listening",
+    "ready",
+    "all ears"
+  ],
+  "sendTail": [
+    "when the line is clear",
+    "as soon as the line opens",
+    "once the queue frees up"
+  ]
+}

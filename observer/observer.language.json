@@ -1,0 +1,90 @@
+{
+  "acknowledgements": {
+    "directWorking": [
+      "I'm working on it.",
+      "Let me {{checkVerb}} that for you.",
+      "On it now.",
+      "I'll {{checkVerb}} that now."
+    ],
+    "queueReady": [
+      "I'm {{readyVerb}} {{taskRef}} {{readyTail}}.",
+      "I've got {{taskRef}} {{queueState}} now.",
+      "I'm {{readyVerb}} {{taskRef}} {{readyTail}}."
+    ],
+    "queueEscalated": [
+      "I'm {{readyVerb}} {{taskRef}} {{readyTail}}.\n\nThen I'll {{handoffVerb}} it to {{destinationLabel}} {{handoffTail}}.",
+      "I've got {{taskRef}} {{queueState}} now.\n\nAfter that I'll {{handoffVerb}} it to {{destinationLabel}} {{handoffTail}}.",
+      "I'm {{readyVerb}} {{taskRef}} {{readyTail}}.\n\nOnce it's set, I'll {{handoffVerb}} it to {{destinationLabel}} {{handoffTail}}."
+    ]
+  },
+  "voice": {
+    "passiveOff": "Passive listening is off. Say <strong>{{botName}}</strong> to begin, then <strong>{{stopPhrase}}</strong> to finish once enabled.",
+    "passiveOn": "Passive listening is on. Say <strong>{{botName}}</strong> to begin.",
+    "listening": "I'm {{listenVerb}}. Say <strong>{{stopPhrase}}</strong> when you're done.",
+    "listeningHeard": "I'm {{listenVerb}}. Say <strong>{{stopPhrase}}</strong> when you're done.<br><strong>Heard:</strong> {{previewText}}",
+    "capturedQueued": "I've queued this request: <strong>{{text}}</strong>",
+    "capturedQueuedMeta": "I'll {{sendVerb}} it through {{sendTail}}.",
+    "capturedRequest": "I heard: <strong>{{text}}</strong>",
+    "capturedSubmitted": "Request sent.",
+    "queuedSubmitted": "Queued request sent.",
+    "sendingQueued": "Sending the next queued request: <strong>{{text}}</strong>"
+  },
+  "taskNarration": {
+    "completedOpeners": [
+      "I've {{completionVerb}} {{taskRef}}.",
+      "{{taskRef}} is {{completionState}}.",
+      "I've {{completionVerb}} {{taskRef}} cleanly.",
+      "{{taskRef}} is {{completionState}} now."
+    ],
+    "failedOpeners": [
+      "I {{issueVerb}} {{taskRef}}.",
+      "{{taskRef}} {{issueTail}}.",
+      "I {{issueVerb}} {{taskRef}} and it {{issueTail}}."
+    ],
+    "failedFallback": [
+      "I wasn't able to finish it cleanly.",
+      "That one didn't come through properly.",
+      "I couldn't close it out the way I wanted."
+    ],
+    "recoveredOpeners": [
+      "I'm {{recoveryVerb}} {{taskRef}} {{recoveryTail}}.",
+      "{{taskRef}} is {{recoveryTail}} now.",
+      "I've got {{taskRef}} {{recoveryTail}}."
+    ],
+    "recoveredFallback": [
+      "{{recoveryDetail}}"
+    ],
+    "escalatedOpeners": [
+      "I'm {{escalateVerb}} {{taskRef}} {{escalateTail}}.",
+      "{{taskRef}} needs more weight, so I'm {{escalateVerb}} it {{escalateTail}}.",
+      "I'm {{escalateVerb}} {{taskRef}} to a stronger brain."
+    ],
+    "escalatedDetail": [
+      "{{brainLabel}} {{nextTail}}.",
+      "From here, {{brainLabel}} {{nextTail}}.",
+      "{{brainLabel}} has the next look at it."
+    ],
+    "inProgressOpeners": [
+      "I'm {{workingVerb}} {{taskRef}}.",
+      "{{taskRef}} is underway.",
+      "I'm {{workingVerb}} {{taskRef}} now.",
+      "I'm still {{workingVerb}} {{taskRef}}."
+    ],
+    "inProgressFastDetail": [
+      "{{fastDetail}}"
+    ],
+    "inProgressDefaultDetail": [
+      "{{slowDetail}}"
+    ],
+    "queuedOpeners": [
+      "I've {{queueVerb}} {{taskRef}}.",
+      "{{taskRef}} is {{queueState}} now.",
+      "I've got {{taskRef}} {{queueVerb}}."
+    ],
+    "queuedFallback": [
+      "It will go to {{brainLabel}} {{queueTail}}.",
+      "{{brainLabel}} will pick it up {{queueTail}}.",
+      "I've got {{brainLabel}} lined up for the next pass."
+    ]
+  }
+}

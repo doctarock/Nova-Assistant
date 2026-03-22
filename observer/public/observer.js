@@ -1,0 +1,854 @@
+var observerApp = window.ObserverApp || (window.ObserverApp = {});
+const {
+  activateTab,
+  activateBrainSubtab,
+  activateNovaSubtab,
+  activateProjectsSubtab,
+  activateSecretsSubtab,
+  activateCalendarSubtab,
+  activateQueueSubtab,
+  activateJobsSubtab,
+  applyTabIcons,
+  dispatchNextTask,
+  enqueueTaskFromPrompt,
+  enqueueUpdate,
+  escapeHtml,
+  formatCronObservation,
+  formatCalendarDateKey,
+  formatDateTime,
+  formatDurationMs,
+  formatEntityRef,
+  loadCronJobs,
+  loadFile,
+  loadMailStatus,
+  loadSecretsCatalog,
+  loadBrainConfig,
+  loadPromptReview,
+  loadNovaConfig,
+  loadCalendarEvents,
+  loadProjectConfig,
+  loadTaskReshapeIssues,
+  loadRegressionSuites,
+  loadToolConfig,
+  loadPanelOpenPreference,
+  loadStateInspector,
+  loadRuntimeOptions,
+  loadTaskFiles,
+  loadTaskQueue,
+  loadTodoList,
+  loadTree,
+  pollCronEvents,
+  pollTaskEvents,
+  pickLanguageVariant: pickLanguageVariantFromApp,
+  parseCalendarInputValue,
+  queueAcknowledgement,
+  readFileAsBase64,
+  refreshStatus,
+  resetToSimpleProjectState,
+  resetCalendarForm,
+  renderCalendarMonth,
+  pollMailInbox,
+  replayWaitingQuestionThroughAvatar,
+  saveAccessSettings,
+  sendMailMessage,
+  saveToolConfig,
+  saveNovaConfig,
+  saveProjectConfig,
+  renderAttachmentList,
+  renderHistory,
+  renderPayloads,
+  reportTaskEvent,
+  refreshRegressionCommandUi,
+  runRegressionSuites,
+  setPanelOpen,
+  setQueuePaused,
+  showQueuedUpdate,
+  speakAcknowledgement,
+  stopPayloadSpeech,
+  updateCalendarFormState,
+  triagePrompt,
+  triagePromptLocally,
+  updateAccessSummary,
+  updateRunButtonState,
+  addBrainEndpointDraft,
+  addCustomBrainDraft,
+  saveBrainConfig
+} = observerApp;
+
+const startAgentRun = async (messageOverride = "", options = {}) => {
+  unlockSpeech();
+  const message = String(messageOverride || document.getElementById("msg").value || "").trim();
+  const sourceIdentity = options?.sourceIdentity && typeof options.sourceIdentity === "object"
+    ? options.sourceIdentity
+    : null;
+  if (runInFlight) {
+    if (message) {
+      pendingSubmissionPrompts.push(sourceIdentity ? { text: message, sourceIdentity } : message);
+      if (pendingSubmissionPrompts.length > MAX_PENDING_SUBMISSION_PROMPTS) {
+        pendingSubmissionPrompts.splice(0, pendingSubmissionPrompts.length - MAX_PENDING_SUBMISSION_PROMPTS);
+      }
+      hintEl.textContent = `Queued another request locally. ${pendingSubmissionPrompts.length} waiting.`;
+    }
+    return;
+  }
+  const sessionId = document.getElementById("sessionId").value;
+  let brain = getIntakeBrain();
+  let spokeInitialAck = false;
+  if (!message) {
+    throw new Error("message is required");
+  }
+  const effectiveMessage = message;
+  document.getElementById("msg").value = effectiveMessage;
+  runInFlight = true;
+  updateRunButtonState();
+  stopPayloadSpeech();
+  runStatusEl.textContent = "Running";
+  runBrainEl.textContent = brain?.label || "-";
+  runModelEl.textContent = "-";
+  runDurationEl.textContent = "-";
+  payloadsEl.innerHTML = `<div class="payload">Waiting for agent response...</div>`;
+  resultEl.textContent = "";
+  hintEl.textContent = "Agent run in progress.";
+
+  let attachments = [];
+
+  try {
+    const shouldRoute = queueHandoffEl.checked && ["bitnet", "worker"].includes(brain?.id || "");
+    if (shouldRoute) {
+      const localTriage = triagePromptLocally({ message: effectiveMessage, brain });
+      if (localTriage.predictedMode === "queue" && localTriage.ack) {
+        queueAcknowledgement(localTriage.ack);
+        spokeInitialAck = true;
+        hintEl.textContent = "Triage is checking whether this should be escalated.";
+      } else if (!spokeInitialAck) {
+        const earlyAck = pickLanguageVariantFromApp(
+          "acknowledgements.queueChecking",
+          "Let me check."
+        );
+        queueAcknowledgement(earlyAck);
+        spokeInitialAck = true;
+        hintEl.textContent = "CPU intake is checking whether this should be escalated.";
+      } else if (localTriage.predictedMode === "direct-fast") {
+        const fastBrain = (runtimeOptions.brains || []).find((entry) => entry.id === "fast");
+        if (fastBrain) {
+          brain = fastBrain;
+          runBrainEl.textContent = fastBrain.label;
+        }
+      } else if (brain?.id === "main" && localTriage.complexity <= 4) {
+        const fastBrain = (runtimeOptions.brains || []).find((entry) => entry.id === "fast");
+        if (fastBrain) {
+          brain = fastBrain;
+          runBrainEl.textContent = fastBrain.label;
+        }
+      }
+      const triage = await triagePrompt({ message: effectiveMessage, brain, sourceIdentity });
+      const triageMessage = String(triage.effectiveMessage || effectiveMessage).trim() || effectiveMessage;
+      if (triage.mode === "observer-native" && triage.nativeResponse) {
+        const native = triage.nativeResponse;
+        runStatusEl.textContent = "ok";
+        runBrainEl.textContent = "Observer";
+        runModelEl.textContent = "native";
+        runDurationEl.textContent = "-";
+        payloadsEl.innerHTML = `<div class="payload">${escapeHtml(native.text || "Done.")}</div>`;
+        resultEl.textContent = JSON.stringify({ ok: true, native, triage }, null, 2);
+        hintEl.textContent = native.detail || native.text || "Observer handled the request directly.";
+        enqueueUpdate({
+          source: "manual",
+          title: native.title || "Observer result",
+          displayText: native.text || "Done.",
+          spokenText: native.text || "",
+          rawText: native.text || "",
+          status: "ok",
+          brainLabel: "Observer",
+          model: "native"
+        }, { priority: true });
+        document.getElementById("msg").value = "";
+        selectedAttachments = [];
+        fileInputEl.value = "";
+        renderAttachmentList();
+        return;
+      }
+      if (triage.action === "reply_only") {
+        const directText = triage.replyText || "Done.";
+        runStatusEl.textContent = "ok";
+        runBrainEl.textContent = triage.selectedBrainLabel || brain?.label || "CPU Intake";
+        runModelEl.textContent = triage.selectedBrainModel || "-";
+        runDurationEl.textContent = "-";
+        payloadsEl.innerHTML = `<div class="payload">${escapeHtml(directText)}</div>`;
+        resultEl.textContent = JSON.stringify({ ok: true, triage }, null, 2);
+        hintEl.textContent = triage.intakeReason || "CPU intake handled the request directly.";
+        enqueueUpdate({
+          source: "manual",
+          title: "CPU intake result",
+          displayText: directText,
+          spokenText: directText,
+          rawText: directText,
+          status: "ok",
+          brainLabel: triage.selectedBrainLabel || brain?.label || "CPU Intake",
+          model: triage.selectedBrainModel || ""
+        }, { priority: true });
+        document.getElementById("msg").value = "";
+        selectedAttachments = [];
+        fileInputEl.value = "";
+        renderAttachmentList();
+        return;
+      }
+      attachments = [];
+      for (const file of selectedAttachments) {
+        attachments.push({
+          name: file.name,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+          contentBase64: await readFileAsBase64(file)
+        });
+      }
+      const task = await enqueueTaskFromPrompt({
+        message: triageMessage,
+        sessionId,
+        brain,
+        attachments,
+        requestedBrainId: triage.selectedBrainId,
+        plannedTasks: triage.plannedTasks || [],
+        sourceIdentity
+      });
+      const taskRef = task.codename || formatEntityRef("task", task.id || "unknown");
+      const destinationLabel = triage.selectedBrainLabel || task.requestedBrainLabel || task.requestedBrainId;
+      const queueTitle = triage.mode === "queue" ? "Getting it ready" : "Getting it ready";
+      const queueDisplayText = triage.replyText || (triage.mode === "queue"
+        ? pickLanguageVariantFromApp("acknowledgements.queueEscalated", `I'm getting {{taskRef}} ready now.\n\nI'll take a deeper look and follow up shortly.`, { taskRef, destinationLabel })
+        : pickLanguageVariantFromApp("acknowledgements.queueReady", `I'm getting {{taskRef}} ready now.`, { taskRef, destinationLabel }));
+      const queueSpokenText = queueDisplayText.replace(/\n+/g, " ");
+      runStatusEl.textContent = "queued";
+      runBrainEl.textContent = `${brain?.label || "Queue intake"} -> ${destinationLabel}`;
+      runModelEl.textContent = "task queue";
+      runDurationEl.textContent = "-";
+      payloadsEl.innerHTML = `<div class="payload"><strong>${escapeHtml(queueTitle)}</strong>\n\n${escapeHtml(queueDisplayText)}</div>`;
+      resultEl.textContent = JSON.stringify({ ok: true, task, triage }, null, 2);
+      hintEl.textContent = `Queued ${taskRef} for ${destinationLabel} (${triage.reason}).`;
+      enqueueUpdate({
+        source: "task",
+        title: queueTitle,
+        displayText: queueDisplayText,
+        spokenText: queueSpokenText,
+        status: task.status || "queued",
+        brainLabel: destinationLabel || "worker",
+        model: "task queue"
+      }, { priority: true });
+      await loadTaskQueue();
+      document.getElementById("msg").value = "";
+      selectedAttachments = [];
+      fileInputEl.value = "";
+      renderAttachmentList();
+      return;
+    }
+
+    if (!spokeInitialAck) {
+      queueAcknowledgement("I’m working on it.");
+    }
+
+    attachments = [];
+    for (const file of selectedAttachments) {
+      attachments.push({
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size,
+        contentBase64: await readFileAsBase64(file)
+      });
+    }
+
+    const r = await fetch("/api/agent/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message: effectiveMessage,
+        sessionId,
+        brainId: brain?.id || "main",
+        preset: DEFAULT_PRESET,
+        internetEnabled: true,
+        forceToolUse: forceToolUseEl.checked,
+        requireWorkerPreflight: requireWorkerPreflightEl.checked,
+        attachments,
+        sourceIdentity
+      })
+    });
+
+    const j = await r.json();
+    const parsed = j.parsed;
+    const result = parsed?.result || parsed;
+    const meta = result?.meta || {};
+    const agentMeta = meta?.agentMeta || {};
+    const responseContent = renderPayloads(result?.payloads);
+    const hasTextResponse = Boolean((responseContent.displayText || "").trim());
+    const artifactSummary = Array.isArray(j.outputFiles) && j.outputFiles.length
+      ? `No text response. Generated files: ${j.outputFiles.map((file) => file.path || file.name).join(", ")}`
+      : "";
+
+    runStatusEl.textContent = parsed?.status || (j.ok ? "ok" : "error");
+    runBrainEl.textContent = j.brain?.label || brain?.label || "-";
+    runModelEl.textContent = j.brain?.model || agentMeta?.model || "-";
+    runDurationEl.textContent = meta?.durationMs ? `${meta.durationMs} ms` : "-";
+    resultEl.textContent = JSON.stringify(j, null, 2);
+    hintEl.textContent = j.ok
+      ? `Run completed with ${j.brain?.label || brain?.label || "unknown brain"} on ${j.network || "unknown network"} and attachments: ${(j.attachments || []).map((file) => file.name).join(", ") || "none"}.`
+      : (j.stderr || j.error || "Run failed.");
+    enqueueUpdate({
+      source: "manual",
+      title: "Manual run result",
+      displayText: responseContent.displayText || artifactSummary || (j.ok ? "Run completed without payload text." : (j.stderr || j.error || "Run failed.")),
+      spokenText: responseContent.spokenText || (artifactSummary ? `[nova:emotion=celebrate] ${artifactSummary}` : ""),
+      rawText: responseContent.rawText || "",
+      status: parsed?.status || (j.ok ? "ok" : "error"),
+      brainLabel: j.brain?.label || brain?.label || "",
+      model: j.brain?.model || agentMeta?.model || ""
+    }, { priority: true });
+    if (j.ok && !hasTextResponse) {
+      runStatusEl.textContent = "no_text";
+      hintEl.textContent = artifactSummary || `${brain?.label || "Agent"} finished without returning payload text. Consider queueing this task to a stronger brain.`;
+    }
+    if (j.ok) {
+      document.getElementById("msg").value = "";
+      selectedAttachments = [];
+      fileInputEl.value = "";
+      renderAttachmentList();
+    }
+  } catch (error) {
+    runStatusEl.textContent = "error";
+    payloadsEl.innerHTML = `<div class="payload">Request failed: ${escapeHtml(error.message)}</div>`;
+    resultEl.textContent = String(error);
+    hintEl.textContent = "Interface request failed before a response was returned.";
+  } finally {
+    runInFlight = false;
+    updateRunButtonState();
+    refreshStatus();
+    showQueuedUpdate();
+    flushPendingSubmissionPrompt();
+  }
+};
+
+runBtn.onclick = () => {
+  startAgentRun().catch((error) => {
+    payloadsEl.innerHTML = `<div class="payload">Request failed: ${escapeHtml(error.message)}</div>`;
+    resultEl.textContent = String(error);
+    hintEl.textContent = "Interface request failed before a response was returned.";
+  });
+};
+
+clearBtn.onclick = () => {
+  stopPayloadSpeech();
+  updateQueue = [];
+  queueDisplayActive = false;
+  payloadsEl.innerHTML = `<div class="payload">Cleared.</div>`;
+  resultEl.textContent = "";
+  selectedAttachments = [];
+  fileInputEl.value = "";
+  renderAttachmentList();
+  runStatusEl.textContent = "Idle";
+  runBrainEl.textContent = "Queued via triage";
+  runModelEl.textContent = "-";
+  runDurationEl.textContent = "-";
+  hintEl.textContent = "Cleared local run output.";
+};
+
+voiceToggleBtn.onclick = () => {
+  unlockSpeech();
+  if (!speechRecognitionSupported || !speechRecognition) {
+    updateVoiceUi();
+    return;
+  }
+  if (voiceListeningEnabled) {
+    voiceListeningEnabled = false;
+    voiceStopRequested = true;
+    if (typeof clearPendingVoiceQuestionWindow === "function") {
+      clearPendingVoiceQuestionWindow();
+    }
+    if (voiceRestartTimer) {
+      window.clearTimeout(voiceRestartTimer);
+      voiceRestartTimer = null;
+    }
+    resetVoiceCapture();
+    try {
+      speechRecognition.stop();
+    } catch {
+      // ignore stop races
+    }
+    updateVoiceUi();
+    return;
+  }
+  voiceListeningEnabled = true;
+  voiceStopRequested = false;
+  resetVoiceCapture();
+  updateVoiceUi();
+  try {
+    speechRecognition.start();
+  } catch {
+    scheduleVoiceRestart(400);
+  }
+};
+
+fileInputEl.onchange = () => {
+  selectedAttachments = Array.from(fileInputEl.files || []);
+  renderAttachmentList();
+};
+
+forceToolUseEl.onchange = () => {
+  updateAccessSummary();
+  saveAccessSettings();
+};
+requireWorkerPreflightEl.onchange = () => {
+  updateAccessSummary();
+  saveAccessSettings();
+};
+queueHandoffEl.onchange = () => {
+  updateAccessSummary();
+  saveAccessSettings();
+};
+
+cronAddBtn.onclick = async () => {
+  cronAddBtn.disabled = true;
+  cronHintEl.textContent = "Creating scheduled job...";
+  try {
+    const r = await fetch("/api/cron/add", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: cronNameEl.value,
+        every: cronEveryEl.value,
+        message: cronMessageEl.value,
+        brainId: cronBrainSelectEl.value
+      })
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      throw new Error(j.error || "Job creation failed");
+    }
+    const staggerText = j.staggered?.nextRunAtMs
+      ? ` Next run: ${formatDateTime(j.staggered.nextRunAtMs)}${j.staggered.applied ? " (auto-staggered)" : ""}.`
+      : "";
+    cronHintEl.textContent = `Created job "${j.job.name}" with ${j.brain.label}.${staggerText}`;
+    await loadCronJobs();
+  } catch (error) {
+    cronHintEl.textContent = error.message;
+  } finally {
+    cronAddBtn.disabled = false;
+  }
+};
+
+pauseQueueBtn.onclick = async () => {
+  await setQueuePaused(true);
+};
+
+resumeQueueBtn.onclick = async () => {
+  await setQueuePaused(false);
+};
+
+async function saveCalendarEventFromForm() {
+  const startAt = parseCalendarInputValue(calendarStartAtEl.value);
+  if (!startAt) {
+    throw new Error("Start date and time are required");
+  }
+  const payload = {
+    id: activeCalendarEventId || undefined,
+    title: calendarTitleEl.value,
+    type: calendarTypeEl.value,
+    startAt,
+    endAt: parseCalendarInputValue(calendarEndAtEl.value),
+    allDay: calendarAllDayEl.checked,
+    location: calendarLocationEl.value,
+    description: calendarDescriptionEl.value,
+    repeat: {
+      frequency: calendarRepeatFrequencyEl.value,
+      interval: Number(calendarRepeatIntervalEl.value || 1) || 1
+    },
+    action: {
+      enabled: calendarActionEnabledEl.checked || calendarTypeEl.value === "nova_action",
+      requestedBrainId: calendarActionBrainEl.value,
+      message: calendarActionMessageEl.value,
+      internetEnabled: true,
+      forceToolUse: true
+    }
+  };
+  const r = await fetch("/api/calendar/events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!r.ok || !j.ok) {
+    throw new Error(j.error || "calendar save failed");
+  }
+  activeCalendarEventId = String(j.event?.id || "");
+  calendarHintEl.textContent = j.message || "Calendar event saved.";
+  await loadCalendarEvents();
+}
+
+async function setCalendarEventState(status) {
+  if (!activeCalendarEventId) {
+    throw new Error("Select an event first");
+  }
+  const r = await fetch(`/api/calendar/events/${encodeURIComponent(activeCalendarEventId)}/state`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status })
+  });
+  const j = await r.json();
+  if (!r.ok || !j.ok) {
+    throw new Error(j.error || `failed to mark event ${status}`);
+  }
+  calendarHintEl.textContent = j.message || `Calendar event marked ${status}.`;
+  await loadCalendarEvents();
+}
+
+calendarSaveBtn.onclick = async () => {
+  calendarSaveBtn.disabled = true;
+  calendarHintEl.textContent = "Saving event...";
+  try {
+    await saveCalendarEventFromForm();
+  } catch (error) {
+    calendarHintEl.textContent = error.message;
+  } finally {
+    calendarSaveBtn.disabled = false;
+  }
+};
+
+calendarCompleteBtn.onclick = async () => {
+  try {
+    await setCalendarEventState("completed");
+  } catch (error) {
+    calendarHintEl.textContent = error.message;
+  }
+};
+
+calendarCancelBtn.onclick = async () => {
+  try {
+    await setCalendarEventState("cancelled");
+  } catch (error) {
+    calendarHintEl.textContent = error.message;
+  }
+};
+
+calendarDeleteBtn.onclick = async () => {
+  if (!activeCalendarEventId) {
+    calendarHintEl.textContent = "Select an event first.";
+    return;
+  }
+  calendarDeleteBtn.disabled = true;
+  calendarHintEl.textContent = "Deleting event...";
+  try {
+    const r = await fetch(`/api/calendar/events/${encodeURIComponent(activeCalendarEventId)}`, {
+      method: "DELETE"
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "calendar delete failed");
+    }
+    calendarHintEl.textContent = j.message || "Calendar event deleted.";
+    resetCalendarForm();
+    await loadCalendarEvents();
+  } catch (error) {
+    calendarHintEl.textContent = error.message;
+  } finally {
+    calendarDeleteBtn.disabled = false;
+  }
+};
+
+calendarNewBtn.onclick = () => {
+  resetCalendarForm();
+  activateCalendarSubtab("calendarEditPanel");
+  calendarHintEl.textContent = "Creating a new event.";
+};
+
+calendarRefreshBtn.onclick = loadCalendarEvents;
+calendarTodayBtn.onclick = () => {
+  calendarMonthAnchorMs = Date.now();
+  calendarSelectedDayKey = formatCalendarDateKey(Date.now());
+  activateCalendarSubtab("calendarDailyPanel");
+  renderCalendarMonth();
+  resetCalendarForm();
+};
+calendarPrevBtn.onclick = () => {
+  const date = new Date(calendarMonthAnchorMs || Date.now());
+  calendarMonthAnchorMs = new Date(date.getFullYear(), date.getMonth() - 1, 1).getTime();
+  renderCalendarMonth();
+};
+calendarNextBtn.onclick = () => {
+  const date = new Date(calendarMonthAnchorMs || Date.now());
+  calendarMonthAnchorMs = new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
+  renderCalendarMonth();
+};
+calendarTypeEl.onchange = updateCalendarFormState;
+calendarActionEnabledEl.onchange = updateCalendarFormState;
+
+mailPollBtn.onclick = async () => {
+  mailPollBtn.disabled = true;
+  mailHintEl.textContent = "Polling mailbox...";
+  try {
+    const result = await pollMailInbox();
+    mailHintEl.textContent = result.count
+      ? `Found ${result.count} new ${result.count === 1 ? "message" : "messages"} since the last check.`
+      : "No new messages.";
+  } catch (error) {
+    mailHintEl.textContent = `Mail poll failed: ${error.message}`;
+  } finally {
+    await loadMailStatus();
+  }
+};
+
+mailSendBtn.onclick = async () => {
+  mailSendBtn.disabled = true;
+  mailHintEl.textContent = "Sending message...";
+  try {
+    await sendMailMessage();
+  } catch (error) {
+    mailHintEl.textContent = `Mail send failed: ${error.message}`;
+  } finally {
+    await loadMailStatus();
+  }
+};
+
+if (mailSummariesEnabledEl) {
+  mailSummariesEnabledEl.onchange = async () => {
+    const enabled = mailSummariesEnabledEl.checked;
+    mailSummariesEnabledEl.disabled = true;
+    mailHintEl.textContent = enabled ? "Enabling email summaries..." : "Disabling email summaries...";
+    try {
+      const r = await fetch("/api/mail/summary-setting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled })
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error || "mail summary setting update failed");
+      }
+      mailHintEl.textContent = enabled ? "Email summaries enabled." : "Email summaries disabled.";
+    } catch (error) {
+      mailSummariesEnabledEl.checked = !enabled;
+      mailHintEl.textContent = `Mail summary setting failed: ${error.message}`;
+    } finally {
+      await loadMailStatus();
+    }
+  };
+}
+
+if (mailMessagesEl) {
+  mailMessagesEl.onclick = async (event) => {
+    const button = event.target.closest(".mail-delete-btn");
+    if (!button) {
+      return;
+    }
+    const messageId = String(button.dataset.messageId || "").trim();
+    if (!messageId) {
+      mailHintEl.textContent = "This message cannot be deleted because it has no message id.";
+      return;
+    }
+    button.disabled = true;
+    mailHintEl.textContent = "Deleting message...";
+    try {
+      const r = await fetch("/api/mail/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          destination: "trash",
+          messageId
+        })
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        throw new Error(j.error || "mail delete failed");
+      }
+      mailHintEl.textContent = "Message moved to trash.";
+      await loadMailStatus();
+    } catch (error) {
+      button.disabled = false;
+      mailHintEl.textContent = `Mail delete failed: ${error.message}`;
+    }
+  };
+}
+
+refreshRegressionBtn.onclick = loadRegressionSuites;
+runAllRegressionsBtn.onclick = async () => {
+  runAllRegressionsBtn.disabled = true;
+  try {
+    await runRegressionSuites("all");
+  } finally {
+    runAllRegressionsBtn.disabled = false;
+  }
+};
+if (regressionCommandSuiteSelectEl) {
+  regressionCommandSuiteSelectEl.onchange = () => {
+    refreshRegressionCommandUi();
+  };
+}
+if (copyRegressionCommandBtn) {
+  copyRegressionCommandBtn.onclick = async () => {
+    const commandLine = String(regressionCommandLineEl?.textContent || "").trim();
+    if (!commandLine) {
+      regressionCommandHintEl.textContent = "No regression command is ready yet.";
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(commandLine);
+      regressionCommandHintEl.textContent = "Regression command copied to the clipboard.";
+    } catch (error) {
+      regressionCommandHintEl.textContent = `Copy failed: ${error.message}`;
+    }
+  };
+}
+
+refreshBtn.onclick = refreshStatus;
+resetTaskReshapeIssuesBtn.onclick = async () => {
+  resetTaskReshapeIssuesBtn.disabled = true;
+  taskReshapeIssuesSummaryEl.textContent = "Resetting recurring issues...";
+  try {
+    const r = await fetch("/api/tasks/reshape-issues/reset", {
+      method: "POST",
+      headers: { "content-type": "application/json" }
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "reset failed");
+    }
+    await loadTaskReshapeIssues();
+    hintEl.textContent = `Recurring issues reset. Cleared ${Number(j.clearedIssueCount || 0)} tracked issue${Number(j.clearedIssueCount || 0) === 1 ? "" : "s"}.`;
+  } catch (error) {
+    taskReshapeIssuesSummaryEl.textContent = `Issue reset failed: ${error.message}`;
+  } finally {
+    resetTaskReshapeIssuesBtn.disabled = false;
+  }
+};
+resetEventHistoryBtn.onclick = () => {
+  const now = Date.now();
+  latestCronEventTs = now;
+  latestTaskEventTs = now;
+  saveEventCursor(CRON_CURSOR_KEY, now);
+  saveEventCursor(TASK_CURSOR_KEY, now);
+  seenTaskEventKeys.clear();
+  historyEntries = [];
+  renderHistory();
+  updateQueue = [];
+  queueDisplayActive = false;
+  hintEl.textContent = "Activity feed reset. Only new job and task updates will be shown from now on.";
+};
+refreshQueueBtn.onclick = loadTaskQueue;
+todoAddBtn.onclick = async () => {
+  const text = String(todoInputEl?.value || "").trim();
+  if (!text) {
+    if (todoHintEl) {
+      todoHintEl.textContent = "Type a to do item first.";
+    }
+    return;
+  }
+  todoAddBtn.disabled = true;
+  if (todoHintEl) {
+    todoHintEl.textContent = "Adding to do item...";
+  }
+  try {
+    const r = await fetch("/api/todos", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text,
+        createdBy: "user",
+        source: "ui"
+      })
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to add to do item");
+    }
+    todoInputEl.value = "";
+    await loadTodoList();
+  } catch (error) {
+    if (todoHintEl) {
+      todoHintEl.textContent = error.message;
+    }
+  } finally {
+    todoAddBtn.disabled = false;
+  }
+};
+questionTimeBtn.onclick = () => {
+  replayWaitingQuestionThroughAvatar();
+};
+dispatchNextBtn.onclick = dispatchNextTask;
+reloadFilesBtn.onclick = () => loadStateInspector({ preserveSelection: true });
+resetSimpleStateBtn.onclick = resetToSimpleProjectState;
+scopeSelect.onchange = () => loadStateInspector({ preserveSelection: true });
+refreshBrainsBtn.onclick = loadBrainConfig;
+refreshSecretsBtn.onclick = loadSecretsCatalog;
+refreshPromptReviewBtn.onclick = loadPromptReview;
+saveBrainsBtn.onclick = saveBrainConfig;
+refreshNovaBtn.onclick = loadNovaConfig;
+saveNovaBtn.onclick = saveNovaConfig;
+refreshToolsBtn.onclick = loadToolConfig;
+saveToolsBtn.onclick = saveToolConfig;
+refreshProjectsBtn.onclick = loadProjectConfig;
+saveProjectsBtn.onclick = saveProjectConfig;
+addBrainEndpointBtn.onclick = addBrainEndpointDraft;
+addCustomBrainBtn.onclick = addCustomBrainDraft;
+setPanelOpen(loadPanelOpenPreference());
+applyTabIcons();
+
+panelToggleBtn.onclick = () => {
+  setPanelOpen(!panelDrawerEl.classList.contains("open"));
+};
+
+panelCloseBtn.onclick = () => {
+  setPanelOpen(false);
+};
+
+tabButtons.forEach((button) => {
+  button.onclick = () => activateTab(button.dataset.tabTarget);
+});
+novaSubtabButtons.forEach((button) => {
+  button.onclick = () => activateNovaSubtab(button.dataset.novaSubtabTarget);
+});
+brainSubtabButtons.forEach((button) => {
+  button.onclick = () => activateBrainSubtab(button.dataset.brainSubtabTarget);
+});
+projectsSubtabButtons.forEach((button) => {
+  button.onclick = () => activateProjectsSubtab(button.dataset.projectsSubtabTarget);
+});
+secretsSubtabButtons.forEach((button) => {
+  button.onclick = () => activateSecretsSubtab(button.dataset.secretsSubtabTarget);
+});
+queueSubtabButtons.forEach((button) => {
+  button.onclick = () => activateQueueSubtab(button.dataset.queueSubtabTarget);
+});
+calendarSubtabButtons.forEach((button) => {
+  button.onclick = () => activateCalendarSubtab(button.dataset.calendarSubtabTarget);
+});
+jobsSubtabButtons.forEach((button) => {
+  button.onclick = () => activateJobsSubtab(button.dataset.jobsSubtabTarget);
+});
+activateNovaSubtab(activeNovaSubtabId || "novaIdentityPanel");
+activateBrainSubtab("brainsEndpointsPanel");
+activateProjectsSubtab(activeProjectsSubtabId || "projectsStatePanel");
+activateSecretsSubtab(activeSecretsSubtabId || "secretsOverviewPanel");
+activateQueueSubtab(activeQueueSubtabId || "taskQueueQueuedPanel");
+activateCalendarSubtab(activeCalendarSubtabId || "calendarDailyPanel");
+activateJobsSubtab(activeJobsSubtabId || "jobsSchedulesPanel");
+initVoiceRecognition();
+updateAccessSummary();
+refreshStatus();
+loadRuntimeOptions();
+loadNovaConfig();
+loadBrainConfig();
+loadSecretsCatalog();
+loadPromptReview();
+loadToolConfig();
+loadProjectConfig();
+loadTaskQueue();
+loadMailStatus();
+loadCronJobs();
+loadCalendarEvents();
+refreshRegressionCommandUi();
+loadRegressionSuites();
+loadStateInspector({ preserveSelection: true });
+pollCronEvents();
+pollTaskEvents();
+renderAttachmentList();
+updateRunButtonState();
+setInterval(refreshStatus, 15000);
+setInterval(pollCronEvents, 15000);
+setInterval(pollTaskEvents, 15000);
+setInterval(loadMailStatus, 30000);
