@@ -1,3 +1,5 @@
+![Preview](https://repository-images.githubusercontent.com/1188661951/fd2bd3dd-5d6e-489e-9259-59c827988f06)
+
 # Handoff
 
 This repo no longer runs as an OpenClaw gateway stack, only the skill library remains integrated. The live system is a host-side Node observer with a Docker sandbox for LLM-controlled tools, plus Ollama for model execution.
