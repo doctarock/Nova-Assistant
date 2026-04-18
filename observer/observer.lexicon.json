@@ -3,7 +3,11 @@
     "check",
     "look over",
     "go over",
-    "dig into"
+    "dig into",
+    "take a look at",
+    "run through",
+    "scan through",
+    "have a look at"
   ],
   "readyVerb": [
     "getting",
@@ -16,6 +20,13 @@
     "up now",
     "in motion now",
     "sorted now"
+  ],
+  "startVerb": [
+    "picking up",
+    "pulling in",
+    "jumping on",
+    "grabbing",
+    "getting into"
   ],
   "handoffVerb": [
     "hand",
@@ -32,30 +43,43 @@
   "sendVerb": [
     "send",
     "hand",
-    "move"
+    "move",
+    "push"
   ],
   "completionVerb": [
     "finished",
     "wrapped up",
     "closed out",
-    "cleared"
+    "cleared",
+    "knocked out",
+    "put to bed",
+    "tied off",
+    "buttoned up"
   ],
   "completionState": [
     "done",
     "sorted",
-    "settled"
+    "settled",
+    "closed",
+    "clear"
   ],
   "issueVerb": [
     "ran into a problem with",
     "hit an issue with",
     "ran aground on",
-    "got tangled up in"
+    "got tangled up in",
+    "stumbled on",
+    "hit a snag with",
+    "ran into a wall on"
   ],
   "issueTail": [
     "didn't come through cleanly",
     "didn't close out properly",
     "stalled before the finish",
-    "fell over before I could finish it"
+    "fell over before I could finish it",
+    "went sideways on me",
+    "came apart in the middle",
+    "hit a wall before the end"
   ],
   "recoveryVerb": [
     "picking",
@@ -71,6 +95,31 @@
     "It had stalled, so I restarted it.",
     "It drifted, so I pulled it back in.",
     "It got stuck in the pipe, so I kicked it loose."
+  ],
+  "retryVerb": [
+    "trying again on",
+    "taking another pass at",
+    "circling back to",
+    "making another run at"
+  ],
+  "holdVerb": [
+    "holding",
+    "pausing",
+    "standing by on",
+    "sitting with"
+  ],
+  "clearVerb": [
+    "cleared",
+    "resolved",
+    "sorted out",
+    "unstuck"
+  ],
+  "blockNoun": [
+    "blocker",
+    "hold",
+    "snag",
+    "hitch",
+    "wall"
   ],
   "escalateVerb": [
     "handing",
@@ -91,7 +140,9 @@
     "working on",
     "still on",
     "in the middle of",
-    "staying with"
+    "staying with",
+    "grinding through",
+    "pushing through"
   ],
   "fastDetail": [
     "I am fast tracking this one.",
@@ -106,12 +157,17 @@
   "queueVerb": [
     "queued",
     "lined up",
-    "set aside"
+    "set aside",
+    "stacked",
+    "parked"
   ],
   "queueState": [
     "queued",
     "lined up",
-    "in the queue"
+    "in the queue",
+    "stacked up",
+    "parked",
+    "on deck"
   ],
   "queueTail": [
     "next",
@@ -127,5 +183,43 @@
     "when the line is clear",
     "as soon as the line opens",
     "once the queue frees up"
+  ],
+  "cleanAdj": [
+    "clean",
+    "tight",
+    "solid",
+    "crisp",
+    "sharp"
+  ],
+  "roughAdj": [
+    "rough",
+    "messy",
+    "tangled",
+    "ragged"
+  ],
+  "heavyAdj": [
+    "heavy",
+    "meaty",
+    "dense",
+    "thick"
+  ],
+  "steadyAdj": [
+    "steady",
+    "smooth",
+    "even",
+    "solid"
+  ],
+  "stuckAdj": [
+    "stuck",
+    "jammed",
+    "frozen",
+    "wedged"
+  ],
+  "depthAdj": [
+    "deep",
+    "thorough",
+    "careful",
+    "close",
+    "hard"
   ]
 }

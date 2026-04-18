@@ -17,11 +17,10 @@ const {
   pickLanguageVariant,
   trustLevelLabel,
   renderAttachmentList,
-  renderMailMessages,
   renderPassivePayload,
+  renderRepairTaskList,
   renderRegressionResults,
   renderRegressionSuiteList,
-  renderTodoList,
   renderTaskReshapeIssuesList,
   renderTaskFilesList,
   renderTaskList,
@@ -33,6 +32,9 @@ const {
   showQueuedUpdate
 } = observerApp;
 
+const pluginEventHandlers = new Map();
+const taskJobTypeCompletedHandlers = new Map();
+
 function renderQdrantDetails(status = {}) {
   const docs = Math.max(0, Number(status?.indexedDocumentCount || 0));
   const chunks = Math.max(0, Number(status?.indexedChunkCount || 0));
@@ -43,7 +45,24 @@ function renderQdrantDetails(status = {}) {
   return `${docs} docs | ${chunks} chunks | ${authLabel} | Sync ${syncLabel}`;
 }
 
+function hasCoreStateBrowserUi() {
+  return Boolean(
+    scopeSelect
+    && selectedFileEl
+    && reloadFilesBtn
+    && stateFileBrowserEl
+    && stateTaskFilesBrowserEl
+    && fileListEl
+    && fileContentEl
+    && taskFilesListEl
+    && taskFileContentEl
+  );
+}
+
 async function loadTaskFile(relativePath) {
+  if (!hasCoreStateBrowserUi()) {
+    return;
+  }
   activeTaskFilePath = relativePath;
   selectedFileEl.value = relativePath || "";
   taskFileContentEl.textContent = "Loading task file...";
@@ -52,23 +71,34 @@ async function loadTaskFile(relativePath) {
     const normalizedPath = String(relativePath || "").trim();
     const isQueueFile = normalizedPath.startsWith("task-queue/")
       || normalizedPath.startsWith("observer-task-queue/")
-      || normalizedPath.startsWith("observer-task-queue/");
+      || normalizedPath.startsWith("derpy-observer-task-queue/");
     const scope = isQueueFile ? "queue" : "workspace";
     const requestPath = isQueueFile
       ? normalizedPath
           .replace(/^task-queue\//, "")
           .replace(/^observer-task-queue\//, "")
-          .replace(/^observer-task-queue\//, "")
+          .replace(/^derpy-observer-task-queue\//, "")
       : normalizedPath;
     const r = await fetch(`/api/inspect/file?scope=${encodeURIComponent(scope)}&file=${encodeURIComponent(requestPath)}`);
     const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to load task file");
+    }
+    if (j.relocated && String(j.file || "").trim()) {
+      activeTaskFilePath = String(j.file || "").trim();
+      selectedFileEl.value = activeTaskFilePath;
+    }
     taskFileContentEl.textContent = j.content || "(empty file)";
+    renderTaskFilesList(buildTaskFileEntries());
   } catch (error) {
     taskFileContentEl.textContent = `Failed to load task file: ${error.message}`;
   }
 }
 
 async function loadTaskFiles(options = {}) {
+  if (!hasCoreStateBrowserUi()) {
+    return;
+  }
   updateStateScopeView();
   if (!options.preserveSelection) {
     activeTaskFilePath = "";
@@ -83,47 +113,6 @@ async function loadTaskFiles(options = {}) {
     ? activeTaskFilePath
     : files[0].relativePath;
   await loadTaskFile(preferredFile);
-}
-
-async function loadPromptReview() {
-  promptReviewHintEl.textContent = "Loading prompt review...";
-  promptReviewListEl.innerHTML = `<div class="panel-subtle">Loading prompt review...</div>`;
-  try {
-    const r = await fetch("/api/prompts/review");
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "failed to load prompt review");
-    }
-    const entries = Array.isArray(j.entries) ? j.entries : [];
-    promptReviewHintEl.textContent = entries.length
-      ? `Showing ${entries.length} live prompt set${entries.length === 1 ? "" : "s"} generated from the current server configuration.`
-      : "No prompt entries are available.";
-    if (!entries.length) {
-      promptReviewListEl.innerHTML = `<div class="panel-subtle">No prompt entries are available.</div>`;
-      return;
-    }
-    promptReviewListEl.innerHTML = entries.map((entry) => `
-      <section class="prompt-review-card">
-        <div class="panel-head compact">
-          <div>
-            <h3>${escapeHtml(String(entry.label || entry.id || "Prompt"))}</h3>
-            <div class="panel-subtle">${escapeHtml([
-              String(entry.kind || "").trim(),
-              String(entry.model || "").trim(),
-              String(entry.specialty || "").trim() ? `specialty=${String(entry.specialty || "").trim()}` : "",
-              String(entry.queueLane || "").trim() ? `lane=${String(entry.queueLane || "").trim()}` : ""
-            ].filter(Boolean).join(" | "))}</div>
-          </div>
-        </div>
-        <div class="micro"><strong>Scenario:</strong> ${escapeHtml(String(entry.scenario || "Review sample"))}</div>
-        <div class="micro"><strong>Sample message:</strong> ${escapeHtml(String(entry.sampleMessage || "(none)"))}</div>
-        <pre class="json-box prompt-review-text">${escapeHtml(String(entry.prompt || ""))}</pre>
-      </section>
-    `).join("");
-  } catch (error) {
-    promptReviewHintEl.textContent = `Prompt review failed: ${error.message}`;
-    promptReviewListEl.innerHTML = `<div class="panel-subtle">Prompt review failed: ${escapeHtml(error.message)}</div>`;
-  }
 }
 
 function quotePowerShellArg(value) {
@@ -174,6 +163,9 @@ function isTaskFilesScopeSelected() {
 }
 
 function updateStateScopeView() {
+  if (!hasCoreStateBrowserUi()) {
+    return;
+  }
   const taskFilesScope = isTaskFilesScopeSelected();
   if (stateFileBrowserEl) {
     stateFileBrowserEl.hidden = taskFilesScope;
@@ -196,6 +188,9 @@ function updateStateScopeView() {
 }
 
 async function loadStateInspector(options = {}) {
+  if (!hasCoreStateBrowserUi()) {
+    return;
+  }
   updateStateScopeView();
   if (isTaskFilesScopeSelected()) {
     return loadTaskFiles({ preserveSelection: options.preserveSelection !== false });
@@ -204,6 +199,7 @@ async function loadStateInspector(options = {}) {
 }
 
 async function resetToSimpleProjectState() {
+  const hasCoreUi = hasCoreStateBrowserUi();
   const confirmationText = "This will clear Nova's internal test projects, queue/runtime logs, observer input/output, and generated prompt logs, then seed one simple checkbox project. Continue?";
   if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm(confirmationText)) {
     return;
@@ -215,9 +211,11 @@ async function resetToSimpleProjectState() {
     stateResetHintEl.textContent = "Resetting internal state...";
   }
   try {
+    const tokenRes = await fetch("/api/admin-token");
+    const tokenJson = await tokenRes.json();
     const r = await fetch("/api/state/reset-simple-project", {
       method: "POST",
-      headers: { "content-type": "application/json" }
+      headers: { "content-type": "application/json", "x-admin-token": tokenJson.token || "" }
     });
     const j = await r.json();
     if (!r.ok || !j.ok) {
@@ -240,25 +238,33 @@ async function resetToSimpleProjectState() {
     if (stateResetHintEl) {
       stateResetHintEl.textContent = j.message || "Reset complete.";
     }
-    if (isTaskFilesScopeSelected()) {
+    if (hasCoreUi && isTaskFilesScopeSelected()) {
       taskFileContentEl.textContent = summaryLines.length ? summaryLines.join("\n") : (j.message || "Reset complete.");
-    } else {
+    } else if (hasCoreUi) {
       fileContentEl.textContent = summaryLines.length ? summaryLines.join("\n") : (j.message || "Reset complete.");
     }
 
-    await Promise.all([
-      loadStateInspector({ preserveSelection: false }),
-      loadTaskQueue(),
-      loadProjectConfig()
-    ]);
+    const refreshTasks = [
+      loadTaskQueue()
+    ];
+    if (hasCoreUi) {
+      refreshTasks.push(loadStateInspector({ preserveSelection: false }));
+    }
+    if (typeof observerApp?.refreshStateBrowserPlugin === "function") {
+      refreshTasks.push(observerApp.refreshStateBrowserPlugin({ preserveSelection: false }));
+    }
+    await Promise.all(refreshTasks);
+    if (typeof observerApp?.loadProjectsPluginPanel === "function") {
+      await observerApp.loadProjectsPluginPanel();
+    }
   } catch (error) {
     const message = `Reset failed: ${error.message}`;
     if (stateResetHintEl) {
       stateResetHintEl.textContent = message;
     }
-    if (isTaskFilesScopeSelected()) {
+    if (hasCoreUi && isTaskFilesScopeSelected()) {
       taskFileContentEl.textContent = message;
-    } else {
+    } else if (hasCoreUi) {
       fileContentEl.textContent = message;
     }
   } finally {
@@ -349,14 +355,75 @@ async function loadTaskReshapeIssues() {
   }
 }
 
-function updateQueueSummaryText(taskSnapshot = latestTaskSnapshot, todoSnapshot = latestTodoSnapshot) {
+function formatRepairMonitorSummary(summary = {}) {
+  const activeFollowUpCount = Math.max(0, Number(summary?.activeFollowUpCount || 0));
+  const activeReviewCount = Math.max(0, Number(summary?.activeReviewCount || 0));
+  const reviewCount = Math.max(0, Number(summary?.reviewCount || 0));
+  const recentOutcomeCount = Math.max(0, Number(summary?.recentOutcomeCount || 0));
+  if (!activeFollowUpCount && !activeReviewCount && !reviewCount && !recentOutcomeCount) {
+    return "No repair activity is being tracked right now.";
+  }
+  const lines = [];
+  const activeBits = [];
+  if (activeFollowUpCount) {
+    activeBits.push(`${activeFollowUpCount} follow-up${activeFollowUpCount === 1 ? "" : "s"} active`);
+  }
+  if (activeReviewCount) {
+    activeBits.push(`${activeReviewCount} repair review${activeReviewCount === 1 ? "" : "s"} running`);
+  }
+  if (activeBits.length) {
+    lines.push(activeBits.join(", "));
+  }
+  const settledReviewCount = Math.max(0, reviewCount - activeReviewCount);
+  const historyBits = [];
+  if (settledReviewCount) {
+    historyBits.push(`${settledReviewCount} logged review${settledReviewCount === 1 ? "" : "s"}`);
+  }
+  if (recentOutcomeCount) {
+    historyBits.push(`${recentOutcomeCount} recent retry outcome${recentOutcomeCount === 1 ? "" : "s"}`);
+  }
+  if (historyBits.length) {
+    lines.push(historyBits.join(", "));
+  }
+  return `${lines.join(". ")}.`;
+}
+
+function renderRepairMonitor(repairMonitor = {}) {
+  const summary = repairMonitor?.summary && typeof repairMonitor.summary === "object"
+    ? repairMonitor.summary
+    : {};
+  renderRepairTaskList(taskRepairActiveEl, repairMonitor?.active, {
+    emptyText: "No active repair follow-ups."
+  });
+  renderRepairTaskList(taskRepairReviewsEl, repairMonitor?.reviews, {
+    emptyText: "No repair review jobs are recorded."
+  });
+  renderRepairTaskList(taskRepairRecentEl, repairMonitor?.recent, {
+    emptyText: "No recent retry outcomes are recorded."
+  });
+  if (taskRepairMonitorSummaryEl) {
+    taskRepairMonitorSummaryEl.textContent = formatRepairMonitorSummary(summary);
+  }
+  if (taskQueueRepairsCountEl) {
+    taskQueueRepairsCountEl.textContent = String(Math.max(0, Number(summary?.totalVisible || 0)));
+  }
+}
+
+function updateQueueSummaryText(taskSnapshot = latestTaskSnapshot) {
   const queued = Array.isArray(taskSnapshot?.queued) ? taskSnapshot.queued : [];
   const waiting = Array.isArray(taskSnapshot?.waiting) ? taskSnapshot.waiting : [];
   const inProgress = Array.isArray(taskSnapshot?.inProgress) ? taskSnapshot.inProgress : [];
   const done = Array.isArray(taskSnapshot?.done) ? taskSnapshot.done : [];
   const failed = Array.isArray(taskSnapshot?.failed) ? taskSnapshot.failed : [];
+  const repairSummary = taskSnapshot?.repairMonitor?.summary && typeof taskSnapshot.repairMonitor.summary === "object"
+    ? taskSnapshot.repairMonitor.summary
+    : {};
+  const activeRepairCount = Math.max(
+    0,
+    Number(repairSummary?.activeFollowUpCount || 0) + Number(repairSummary?.activeReviewCount || 0)
+  );
   const paused = runtimeOptions?.queue?.paused === true;
-  queueSummaryEl.textContent = `${queued.length} queued, ${waiting.length} questions, ${inProgress.length} in progress, ${done.length} done, ${failed.length} failed.${paused ? " Queue paused." : ""}`;
+  queueSummaryEl.textContent = `${queued.length} queued, ${waiting.length} questions, ${inProgress.length} in progress, ${done.length} done, ${failed.length} failed.${activeRepairCount ? ` ${activeRepairCount} repair item${activeRepairCount === 1 ? "" : "s"} active.` : ""}${paused ? " Queue paused." : ""}`;
 }
 
 function updateQueueControlUi() {
@@ -412,6 +479,7 @@ async function setQueuePaused(paused) {
 }
 
 let pendingQuestionTimeReplayTimer = null;
+let activeWaitingQuestionTaskId = "";
 
 function getWaitingQuestionDraft(taskId = "") {
   return String(waitingQuestionAnswerDrafts.get(String(taskId || "").trim()) || "");
@@ -428,6 +496,67 @@ function setWaitingQuestionDraft(taskId = "", value = "") {
     return;
   }
   waitingQuestionAnswerDrafts.delete(normalizedTaskId);
+}
+
+function pickActiveWaitingQuestion(questions = []) {
+  const items = Array.isArray(questions) ? questions : [];
+  if (!items.length) {
+    activeWaitingQuestionTaskId = "";
+    return null;
+  }
+  const preferredTaskIds = [
+    String(activeWaitingQuestionTaskId || "").trim(),
+    String(activeQuestionTimeTaskId || "").trim()
+  ].filter(Boolean);
+  for (const preferredTaskId of preferredTaskIds) {
+    const match = items.find((task) => String(task?.id || "").trim() === preferredTaskId);
+    if (match) {
+      activeWaitingQuestionTaskId = preferredTaskId;
+      return match;
+    }
+  }
+  const firstTask = items[0];
+  activeWaitingQuestionTaskId = String(firstTask?.id || "").trim();
+  return firstTask;
+}
+
+function captureWaitingQuestionInputState() {
+  if (!taskQueueWaitingEl) {
+    return null;
+  }
+  const activeEl = document.activeElement;
+  if (!activeEl || typeof activeEl.matches !== "function") {
+    return null;
+  }
+  if (!taskQueueWaitingEl.contains(activeEl) || !activeEl.matches("[data-waiting-question-answer]")) {
+    return null;
+  }
+  const selectionStart = typeof activeEl.selectionStart === "number" ? activeEl.selectionStart : null;
+  const selectionEnd = typeof activeEl.selectionEnd === "number" ? activeEl.selectionEnd : null;
+  return {
+    taskId: String(activeEl.dataset.waitingQuestionTaskId || "").trim(),
+    selectionStart,
+    selectionEnd,
+    selectionDirection: String(activeEl.selectionDirection || "none")
+  };
+}
+
+function restoreWaitingQuestionInputState(answerInput, inputState = null, taskId = "") {
+  if (!answerInput || !inputState) {
+    return;
+  }
+  const normalizedTaskId = String(taskId || "").trim();
+  if (!normalizedTaskId || inputState.taskId !== normalizedTaskId) {
+    return;
+  }
+  answerInput.focus({ preventScroll: true });
+  if (typeof inputState.selectionStart !== "number" || typeof inputState.selectionEnd !== "number") {
+    return;
+  }
+  const maxLength = answerInput.value.length;
+  const start = Math.max(0, Math.min(maxLength, inputState.selectionStart));
+  const end = Math.max(0, Math.min(maxLength, inputState.selectionEnd));
+  answerInput.setSelectionRange(start, end, inputState.selectionDirection || "none");
 }
 
 function scheduleQuestionTimeReplay(delayMs = 120) {
@@ -479,16 +608,21 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
   if (!taskQueueWaitingEl) {
     return;
   }
+  const priorInputState = captureWaitingQuestionInputState();
   if (options.errorMessage) {
+    activeWaitingQuestionTaskId = "";
     taskQueueWaitingEl.innerHTML = `<div class="panel-subtle">${escapeHtml(String(options.errorMessage || "Question load failed."))}</div>`;
     return;
   }
   const questions = Array.isArray(waiting) ? waiting : [];
-  const task = questions[0];
+  const task = pickActiveWaitingQuestion(questions);
   if (!task) {
+    activeWaitingQuestionTaskId = "";
     taskQueueWaitingEl.innerHTML = `<div class="panel-subtle">No questions waiting.</div>`;
     return;
   }
+  const normalizedTaskId = String(task.id || "").trim();
+  activeWaitingQuestionTaskId = normalizedTaskId;
   const narration = buildTaskNarration(task);
   const pendingCount = Math.max(0, questions.length - 1);
   const pendingText = pendingCount
@@ -502,10 +636,11 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
       <div class="micro">Code: ${escapeHtml(task.codename || formatEntityRef("task", task.id || "unknown"))}</div>
       <div style="white-space: pre-wrap; margin-top: 0.75rem;">${escapeHtml(String(narration.displayText || task.questionForUser || "I need your direction before I can continue.").trim())}</div>
       <div class="queue-answer" style="margin-top: 1rem;">
-        <textarea class="queue-answer-input" data-waiting-question-answer rows="4" placeholder="Type your answer here">${escapeHtml(draftAnswer)}</textarea>
+        <textarea class="queue-answer-input" data-waiting-question-answer data-waiting-question-task-id="${escapeAttr(normalizedTaskId)}" rows="4" placeholder="Type your answer here">${escapeHtml(draftAnswer)}</textarea>
         <div class="queue-item-actions">
           <button type="button" class="secondary" data-submit-waiting-question>Send answer</button>
           <button type="button" class="secondary" data-clear-waiting-question-answer>Clear</button>
+          <button type="button" class="secondary" data-next-waiting-question ${pendingCount ? "" : "disabled"}>Next question</button>
           <button type="button" class="secondary" data-remove-waiting-question>Remove question</button>
         </div>
         <div class="micro" data-waiting-question-status></div>
@@ -515,10 +650,15 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
   const answerInput = taskQueueWaitingEl.querySelector("[data-waiting-question-answer]");
   const submitButton = taskQueueWaitingEl.querySelector("[data-submit-waiting-question]");
   const clearButton = taskQueueWaitingEl.querySelector("[data-clear-waiting-question-answer]");
+  const nextButton = taskQueueWaitingEl.querySelector("[data-next-waiting-question]");
   const removeButton = taskQueueWaitingEl.querySelector("[data-remove-waiting-question]");
   const statusEl = taskQueueWaitingEl.querySelector("[data-waiting-question-status]");
   if (answerInput) {
+    answerInput.addEventListener("focus", () => {
+      activeWaitingQuestionTaskId = normalizedTaskId;
+    });
     answerInput.addEventListener("input", () => {
+      activeWaitingQuestionTaskId = normalizedTaskId;
       setWaitingQuestionDraft(task.id, answerInput.value);
     });
     answerInput.addEventListener("keydown", (event) => {
@@ -527,9 +667,11 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
         submitButton?.click();
       }
     });
+    restoreWaitingQuestionInputState(answerInput, priorInputState, normalizedTaskId);
   }
   if (clearButton && answerInput) {
     clearButton.onclick = () => {
+      activeWaitingQuestionTaskId = normalizedTaskId;
       setWaitingQuestionDraft(task.id, "");
       answerInput.value = "";
       if (statusEl) {
@@ -540,6 +682,7 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
   }
   if (submitButton && answerInput) {
     submitButton.onclick = async () => {
+      activeWaitingQuestionTaskId = normalizedTaskId;
       const answer = String(answerInput.value || "").trim();
       if (!answer) {
         if (statusEl) {
@@ -556,7 +699,7 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
         statusEl.textContent = "Sending...";
       }
       try {
-        const r = await fetch("/api/tasks/answer", {
+        const r = await pluginAdminFetch("/api/tasks/answer", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -601,8 +744,45 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
       }
     };
   }
+  if (nextButton) {
+    nextButton.onclick = () => {
+      if (questions.length <= 1) {
+        if (statusEl) {
+          statusEl.textContent = "No other questions waiting.";
+        }
+        return;
+      }
+      const currentIndex = questions.findIndex((entry) => String(entry?.id || "").trim() === normalizedTaskId);
+      const nextIndex = currentIndex >= 0
+        ? (currentIndex + 1) % questions.length
+        : 0;
+      const nextTask = questions[nextIndex];
+      if (!nextTask) {
+        return;
+      }
+      const nextTaskId = String(nextTask.id || "").trim();
+      if (!nextTaskId) {
+        return;
+      }
+      activeWaitingQuestionTaskId = nextTaskId;
+      if (questionTimeActive && typeof setActiveQuestionTimeTaskId === "function") {
+        setActiveQuestionTimeTaskId(nextTaskId);
+      }
+      renderWaitingQuestionsPanel(questions);
+      if (statusEl) {
+        statusEl.textContent = "";
+      }
+      if (hintEl) {
+        hintEl.textContent = "Showing the next waiting question.";
+      }
+      if (questionTimeActive) {
+        replayWaitingQuestionThroughAvatar();
+      }
+    };
+  }
   if (removeButton) {
     removeButton.onclick = async () => {
+      activeWaitingQuestionTaskId = normalizedTaskId;
       removeButton.disabled = true;
       if (submitButton) {
         submitButton.disabled = true;
@@ -611,7 +791,7 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
         statusEl.textContent = "Removing...";
       }
       try {
-        const r = await fetch("/api/tasks/remove", {
+        const r = await pluginAdminFetch("/api/tasks/remove", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ taskId: task.id })
@@ -652,45 +832,6 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
   }
 }
 
-async function loadTodoList() {
-  try {
-    const r = await fetch("/api/todos");
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "todo list unavailable");
-    }
-    latestTodoSnapshot = {
-      items: Array.isArray(j.items) ? j.items : [],
-      open: Array.isArray(j.open) ? j.open : [],
-      completed: Array.isArray(j.completed) ? j.completed : [],
-      summary: j.summary || {
-        openCount: Array.isArray(j.open) ? j.open.length : 0,
-        completedCount: Array.isArray(j.completed) ? j.completed.length : 0
-      }
-    };
-    renderTodoList(latestTodoSnapshot);
-    if (calendarTodoCountEl) {
-      calendarTodoCountEl.textContent = String(latestTodoSnapshot.open.length);
-    }
-    updateQueueSummaryText(latestTaskSnapshot, latestTodoSnapshot);
-  } catch (error) {
-    latestTodoSnapshot = { items: [], open: [], completed: [], summary: { openCount: 0, completedCount: 0 } };
-    if (todoHintEl) {
-      todoHintEl.textContent = `To do load failed: ${error.message}`;
-    }
-    if (todoOpenListEl) {
-      todoOpenListEl.innerHTML = `<div class="panel-subtle">To do load failed.</div>`;
-    }
-    if (todoCompletedListEl) {
-      todoCompletedListEl.innerHTML = `<div class="panel-subtle">To do load failed.</div>`;
-    }
-    if (calendarTodoCountEl) {
-      calendarTodoCountEl.textContent = "0";
-    }
-    updateQueueSummaryText(latestTaskSnapshot, latestTodoSnapshot);
-  }
-}
-
 async function loadTaskQueue() {
   try {
     const r = await fetch("/api/tasks/list");
@@ -703,7 +844,8 @@ async function loadTaskQueue() {
     const inProgress = Array.isArray(j.inProgress) ? j.inProgress : [];
     const done = Array.isArray(j.done) ? j.done : [];
     const failed = Array.isArray(j.failed) ? j.failed : [];
-    latestTaskSnapshot = { queued, waiting, inProgress, done, failed };
+    const repairMonitor = j.repairMonitor && typeof j.repairMonitor === "object" ? j.repairMonitor : {};
+    latestTaskSnapshot = { queued, waiting, inProgress, done, failed, repairMonitor };
     syncInProgressTaskUpdates(inProgress);
     renderTaskList(taskQueueQueuedEl, queued);
     renderWaitingQuestionsPanel(waiting);
@@ -711,6 +853,7 @@ async function loadTaskQueue() {
     renderTaskList(taskQueueInProgressEl, inProgress);
     renderTaskList(taskQueueDoneEl, done.slice(0, 10));
     renderTaskList(taskQueueFailedEl, failed.slice(0, 10));
+    renderRepairMonitor(repairMonitor);
     if (taskQueueQueuedCountEl) taskQueueQueuedCountEl.textContent = String(queued.length);
     if (novaQuestionsCountEl) novaQuestionsCountEl.textContent = String(waiting.length);
     if (taskQueueInProgressCountEl) taskQueueInProgressCountEl.textContent = String(inProgress.length);
@@ -718,10 +861,10 @@ async function loadTaskQueue() {
     if (taskQueueFailedCountEl) taskQueueFailedCountEl.textContent = String(failed.length);
     if (questionTimeBtn) questionTimeBtn.disabled = waiting.length === 0;
     activateQueueSubtab(activeQueueSubtabId || "taskQueueQueuedPanel");
-    updateQueueSummaryText(latestTaskSnapshot, latestTodoSnapshot);
+    updateQueueSummaryText();
     await loadTaskReshapeIssues();
-    await loadTodoList();
     loadTaskFiles({ preserveSelection: true });
+    observerApp.refreshStateBrowserPlugin?.({ preserveSelection: true, source: "task-queue" });
   } catch (error) {
     queueSummaryEl.textContent = `Queue load failed: ${error.message}`;
     taskQueueQueuedEl.innerHTML = `<div class="panel-subtle">Queue load failed.</div>`;
@@ -729,36 +872,43 @@ async function loadTaskQueue() {
     taskQueueInProgressEl.innerHTML = `<div class="panel-subtle">Queue load failed.</div>`;
     taskQueueDoneEl.innerHTML = `<div class="panel-subtle">Queue load failed.</div>`;
     taskQueueFailedEl.innerHTML = `<div class="panel-subtle">Queue load failed.</div>`;
+    if (taskRepairActiveEl) taskRepairActiveEl.innerHTML = `<div class="panel-subtle">Repair load failed.</div>`;
+    if (taskRepairReviewsEl) taskRepairReviewsEl.innerHTML = `<div class="panel-subtle">Repair load failed.</div>`;
+    if (taskRepairRecentEl) taskRepairRecentEl.innerHTML = `<div class="panel-subtle">Repair load failed.</div>`;
     if (taskQueueQueuedCountEl) taskQueueQueuedCountEl.textContent = "0";
     if (novaQuestionsCountEl) novaQuestionsCountEl.textContent = "0";
     if (taskQueueInProgressCountEl) taskQueueInProgressCountEl.textContent = "0";
     if (taskQueueDoneCountEl) taskQueueDoneCountEl.textContent = "0";
     if (taskQueueFailedCountEl) taskQueueFailedCountEl.textContent = "0";
-    if (calendarTodoCountEl) calendarTodoCountEl.textContent = "0";
+    if (taskQueueRepairsCountEl) taskQueueRepairsCountEl.textContent = "0";
     if (questionTimeBtn) questionTimeBtn.disabled = true;
+    if (taskRepairMonitorSummaryEl) taskRepairMonitorSummaryEl.textContent = `Repair monitor load failed: ${error.message}`;
     if (taskReshapeIssuesSummaryEl) taskReshapeIssuesSummaryEl.textContent = "Recurring issue summary unavailable.";
     if (taskReshapeIssuesListEl) taskReshapeIssuesListEl.innerHTML = `<div class="panel-subtle">Recurring issue load failed.</div>`;
     if (taskQueueIssuesCountEl) taskQueueIssuesCountEl.textContent = "0";
     taskFilesListEl.innerHTML = `<div class="panel-subtle">Task file load failed.</div>`;
     taskFileContentEl.textContent = `Failed to load task files: ${error.message}`;
-    if (todoHintEl) todoHintEl.textContent = "To do list unavailable.";
-    if (todoOpenListEl) todoOpenListEl.innerHTML = `<div class="panel-subtle">To do load failed.</div>`;
-    if (todoCompletedListEl) todoCompletedListEl.innerHTML = `<div class="panel-subtle">To do load failed.</div>`;
   }
 }
 
 function replayWaitingQuestionThroughAvatar() {
   const waiting = Array.isArray(latestTaskSnapshot?.waiting) ? latestTaskSnapshot.waiting : [];
   const activeTaskId = String(activeQuestionTimeTaskId || "").trim();
+  const activeWaitingTaskId = String(activeWaitingQuestionTaskId || "").trim();
   const task = (activeTaskId
     ? waiting.find((entry) => String(entry?.id || "").trim() === activeTaskId)
+    : null)
+    || (activeWaitingTaskId
+      ? waiting.find((entry) => String(entry?.id || "").trim() === activeWaitingTaskId)
     : null) || waiting[0];
   if (!task) {
     setQuestionTimeActive(false);
+    activeWaitingQuestionTaskId = "";
     hintEl.textContent = "There is no active waiting question to replay.";
     return false;
   }
   const narration = buildTaskNarration(task);
+  activeWaitingQuestionTaskId = String(task.id || "").trim();
   if (typeof setQuestionTimeActive === "function") {
     setQuestionTimeActive(true);
   }
@@ -833,7 +983,7 @@ async function runRegressionSuites(suiteId = "all") {
   renderRegressionSuiteList(regressionSuiteListEl, observerApp.regressionSuites || [], observerApp.activeRegressionRun);
   runAllRegressionsBtn.disabled = true;
   try {
-    const r = await fetch("/api/regressions/run", {
+    const r = await pluginAdminFetch("/api/regressions/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ suiteId })
@@ -867,7 +1017,7 @@ async function runRegressionSuites(suiteId = "all") {
 }
 
 async function enqueueTaskFromPrompt({ message, sessionId, brain, attachments, requestedBrainId, plannedTasks = [], sourceIdentity = null }) {
-  const r = await fetch("/api/tasks/enqueue", {
+  const r = await pluginAdminFetch("/api/tasks/enqueue", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -892,7 +1042,7 @@ async function enqueueTaskFromPrompt({ message, sessionId, brain, attachments, r
 }
 
 async function triagePrompt({ message, brain, sourceIdentity = null }) {
-  const r = await fetch("/api/tasks/triage", {
+  const r = await pluginAdminFetch("/api/tasks/triage", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -949,7 +1099,7 @@ async function dispatchNextTask() {
   queueDispatchInFlight = true;
   dispatchNextBtn.disabled = true;
   try {
-    const r = await fetch("/api/tasks/dispatch-next", {
+    const r = await pluginAdminFetch("/api/tasks/dispatch-next", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({})
@@ -977,12 +1127,57 @@ async function readFileAsBase64(file) {
   return btoa(binary);
 }
 
+async function installUploadedPluginPackage() {
+  if (!pluginUploadInputEl || !installPluginUploadBtn || !pluginUploadStatusEl || !pluginUploadResultEl) {
+    return;
+  }
+  const file = Array.from(pluginUploadInputEl.files || [])[0] || null;
+  if (!file) {
+    pluginUploadStatusEl.textContent = "Choose a plugin package first.";
+    return;
+  }
+  installPluginUploadBtn.disabled = true;
+  pluginUploadStatusEl.textContent = `Uploading ${file.name}...`;
+  try {
+    const autoRestart = pluginUploadAutoRestartEl?.checked === true;
+    const attachment = {
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      size: Number(file.size || 0),
+      contentBase64: await readFileAsBase64(file)
+    };
+    const response = await pluginAdminFetch("/api/plugins/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ attachment, autoRestart })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || "failed to install plugin package");
+    }
+    const warningText = String(payload.warning || "").trim();
+    pluginUploadStatusEl.textContent = String(
+      warningText
+        || payload.result?.message
+        || "Plugin package installed. Restart Observer before enabling it."
+    ).trim();
+    pluginUploadResultEl.textContent = JSON.stringify(payload, null, 2);
+    pluginUploadInputEl.value = "";
+  } catch (error) {
+    pluginUploadStatusEl.textContent = `Plugin install failed: ${error.message}`;
+    pluginUploadResultEl.textContent = String(error?.message || error || "unknown error");
+  } finally {
+    installPluginUploadBtn.disabled = false;
+  }
+}
+
 function stopPayloadSpeech() {
   const shouldResumeVoice = voicePausedForTts && voiceListeningEnabled;
   if ("speechSynthesis" in window) {
     window.speechSynthesis.cancel();
   }
   activeUtterance = null;
+  pendingUtteranceChunks = [];
   speechCompletionHandler = null;
   if (window.agentAvatar?.endSpeech) {
     window.agentAvatar.endSpeech();
@@ -1022,6 +1217,31 @@ function chooseVoice() {
     || null;
 }
 
+function splitIntoSpeechChunks(text, maxLen = 280) {
+  if (text.length <= maxLen) return [text];
+  const parts = text.split(/([.!?]+)\s+/);
+  const sentences = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const sentence = ((parts[index] || "") + (parts[index + 1] || "")).trim();
+    if (sentence) sentences.push(sentence);
+  }
+  if (!sentences.length) return [text];
+  const chunks = [];
+  let current = "";
+  for (const sentence of sentences) {
+    if (!current) {
+      current = sentence;
+    } else if (current.length + 1 + sentence.length <= maxLen) {
+      current += " " + sentence;
+    } else {
+      chunks.push(current);
+      current = sentence;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [text];
+}
+
 function presentPayloadSpeech(rawText, options = {}) {
   const prepared = window.agentAvatar?.prepareResponseText
     ? window.agentAvatar.prepareResponseText(rawText)
@@ -1054,19 +1274,6 @@ function presentPayloadSpeech(rawText, options = {}) {
     return;
   }
 
-  const finishSpeechAttempt = (utterance, retryTimer) => {
-    if (retryTimer) {
-      clearTimeout(retryTimer);
-    }
-    if (activeUtterance === utterance) {
-      activeUtterance = null;
-    }
-    window.agentAvatar?.endSpeech?.();
-    if (options.bypassVoiceCaptureBlock !== true) {
-      resumeVoiceListeningAfterTts();
-    }
-  };
-
   const completeSpeechAttempt = () => {
     const handler = speechCompletionHandler;
     speechCompletionHandler = null;
@@ -1076,8 +1283,13 @@ function presentPayloadSpeech(rawText, options = {}) {
     }, 80);
   };
 
-  const speakOnce = (attempt = 0) => {
-    const utterance = new SpeechSynthesisUtterance(cleanText);
+  // Split into sentence-sized chunks to avoid Chrome/Edge TTS cutoff on long responses
+  const chunks = splitIntoSpeechChunks(cleanText);
+  pendingUtteranceChunks = chunks.slice(1);
+  let avatarStarted = false;
+
+  const speakChunk = (chunkText, attempt = 0) => {
+    const utterance = new SpeechSynthesisUtterance(chunkText);
     const voice = chooseVoice();
     let started = false;
     let retryTimer = null;
@@ -1095,27 +1307,55 @@ function presentPayloadSpeech(rawText, options = {}) {
         clearTimeout(retryTimer);
         retryTimer = null;
       }
-      if (options.bypassVoiceCaptureBlock !== true) {
-        pauseVoiceListeningForTts();
+      if (!avatarStarted) {
+        avatarStarted = true;
+        if (options.bypassVoiceCaptureBlock !== true) {
+          pauseVoiceListeningForTts();
+        }
+        options.onStart?.();
+        window.agentAvatar?.beginSpeech?.(prepared.clipNames);
       }
-      options.onStart?.();
-      window.agentAvatar?.beginSpeech?.(prepared.clipNames);
     };
     utterance.onend = () => {
-      finishSpeechAttempt(utterance, retryTimer);
-      completeSpeechAttempt();
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      if (activeUtterance === utterance) {
+        activeUtterance = null;
+      }
+      const next = pendingUtteranceChunks.shift();
+      if (next !== undefined) {
+        window.setTimeout(() => speakChunk(next), 50);
+      } else {
+        window.agentAvatar?.endSpeech?.();
+        if (options.bypassVoiceCaptureBlock !== true) {
+          resumeVoiceListeningAfterTts();
+        }
+        completeSpeechAttempt();
+      }
     };
     utterance.onerror = () => {
-      finishSpeechAttempt(utterance, retryTimer);
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      if (activeUtterance === utterance) {
+        activeUtterance = null;
+      }
       if (!started && attempt < 1) {
-        window.setTimeout(() => speakOnce(attempt + 1), 180);
+        window.setTimeout(() => speakChunk(chunkText, attempt + 1), 180);
         return;
+      }
+      pendingUtteranceChunks = [];
+      window.agentAvatar?.endSpeech?.();
+      if (options.bypassVoiceCaptureBlock !== true) {
+        resumeVoiceListeningAfterTts();
       }
       completeSpeechAttempt();
     };
 
     activeUtterance = utterance;
-    speechCompletionHandler = typeof options.onComplete === "function" ? options.onComplete : null;
 
     try {
       window.speechSynthesis.resume();
@@ -1132,13 +1372,13 @@ function presentPayloadSpeech(rawText, options = {}) {
           // ignore browser-specific failures
         }
         activeUtterance = null;
-        speechCompletionHandler = null;
-        window.setTimeout(() => speakOnce(attempt + 1), 180);
+        window.setTimeout(() => speakChunk(chunkText, attempt + 1), 180);
       }
     }, speechUnlocked ? 1200 : 1800);
   };
 
-  window.setTimeout(() => speakOnce(0), 50);
+  speechCompletionHandler = typeof options.onComplete === "function" ? options.onComplete : null;
+  window.setTimeout(() => speakChunk(chunks[0]), 50);
 }
 
 function speakAcknowledgement(text) {
@@ -1185,31 +1425,15 @@ function queueAcknowledgement(text) {
 
 function populateBrainOptions() {
   const brains = Array.isArray(runtimeOptions.brains) ? runtimeOptions.brains : [];
-  cronBrainSelectEl.innerHTML = brains
-    .filter((brain) => brain.cronCapable)
-    .map((brain) => `<option value="${escapeHtml(brain.id)}">${escapeHtml(brain.label)}</option>`)
-    .join("");
-  calendarActionBrainEl.innerHTML = brains
-    .filter((brain) => brain.kind === "worker" && brain.toolCapable)
-    .map((brain) => `<option value="${escapeHtml(brain.id)}">${escapeHtml(brain.label)}</option>`)
-    .join("");
-
-  if (!cronBrainSelectEl.value) {
-    cronBrainSelectEl.value = "worker";
+  if (cronBrainSelectEl) {
+    cronBrainSelectEl.innerHTML = brains
+      .filter((brain) => brain.cronCapable)
+      .map((brain) => `<option value="${escapeHtml(brain.id)}">${escapeHtml(brain.label)}</option>`)
+      .join("");
+    if (!cronBrainSelectEl.value) {
+      cronBrainSelectEl.value = "worker";
+    }
   }
-  if (!calendarActionBrainEl.value) {
-    calendarActionBrainEl.value = "worker";
-  }
-}
-
-function activateCalendarSubtab(targetId) {
-  activeCalendarSubtabId = targetId || "calendarDailyPanel";
-  calendarSubtabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.calendarSubtabTarget === activeCalendarSubtabId);
-  });
-  calendarSubtabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.id === activeCalendarSubtabId);
-  });
 }
 
 function getDefaultMountIds() {
@@ -1270,6 +1494,9 @@ function updateAccessSummary() {
 }
 
 async function loadTree() {
+  if (!hasCoreStateBrowserUi()) {
+    return;
+  }
   const scope = scopeSelect.value;
   updateStateScopeView();
   if (scope === "taskfiles") {
@@ -1403,300 +1630,6 @@ async function removeCronJob(seriesId) {
   }
 }
 
-function startOfCalendarMonth(timestamp = Date.now()) {
-  const date = new Date(Number(timestamp || Date.now()));
-  return new Date(date.getFullYear(), date.getMonth(), 1).getTime();
-}
-
-function formatCalendarDateKey(timestamp) {
-  const date = new Date(Number(timestamp || 0));
-  if (!Number.isFinite(date.getTime())) {
-    return "";
-  }
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatCalendarAgendaHeading(timestamp) {
-  const date = new Date(Number(timestamp || 0));
-  if (!Number.isFinite(date.getTime())) {
-    return "Agenda";
-  }
-  const dayName = date.toLocaleDateString([], { weekday: "long" });
-  const monthName = date.toLocaleDateString([], { month: "long" });
-  const day = date.getDate();
-  const mod10 = day % 10;
-  const mod100 = day % 100;
-  let suffix = "th";
-  if (mod10 === 1 && mod100 !== 11) suffix = "st";
-  else if (mod10 === 2 && mod100 !== 12) suffix = "nd";
-  else if (mod10 === 3 && mod100 !== 13) suffix = "rd";
-  return `${dayName}, ${day}${suffix} ${monthName} - Agenda`;
-}
-
-function formatCalendarInputValue(timestamp, allDay = false) {
-  if (!Number(timestamp || 0)) {
-    return "";
-  }
-  const date = new Date(Number(timestamp));
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  if (allDay) {
-    return `${year}-${month}-${day}T00:00`;
-  }
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-}
-
-function parseCalendarInputValue(value) {
-  const parsed = Date.parse(String(value || "").trim());
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function getCalendarSelectedDayTs() {
-  const parsed = Date.parse(`${calendarSelectedDayKey}T00:00:00`);
-  return Number.isFinite(parsed) ? parsed : Date.now();
-}
-
-function getCalendarDefaultStartAt() {
-  const base = new Date(getCalendarSelectedDayTs());
-  base.setHours(9, 0, 0, 0);
-  return base.getTime();
-}
-
-function normalizeCalendarClientRepeat(repeat = {}) {
-  const frequency = ["none", "daily", "weekly", "monthly", "yearly"].includes(String(repeat?.frequency || "none"))
-    ? String(repeat.frequency || "none")
-    : "none";
-  const interval = Math.max(1, Math.min(Number(repeat?.interval || 1) || 1, 365));
-  return { frequency, interval };
-}
-
-function advanceCalendarClientOccurrence(startAt, repeat, occurrenceAt) {
-  const normalizedRepeat = normalizeCalendarClientRepeat(repeat);
-  if (normalizedRepeat.frequency === "none") {
-    return 0;
-  }
-  const next = new Date(Number(occurrenceAt || startAt || 0));
-  if (!Number.isFinite(next.getTime())) {
-    return 0;
-  }
-  if (normalizedRepeat.frequency === "daily") {
-    next.setDate(next.getDate() + normalizedRepeat.interval);
-  } else if (normalizedRepeat.frequency === "weekly") {
-    next.setDate(next.getDate() + (normalizedRepeat.interval * 7));
-  } else if (normalizedRepeat.frequency === "monthly") {
-    next.setMonth(next.getMonth() + normalizedRepeat.interval);
-  } else if (normalizedRepeat.frequency === "yearly") {
-    next.setFullYear(next.getFullYear() + normalizedRepeat.interval);
-  }
-  return next.getTime();
-}
-
-function buildCalendarOccurrencesForRange(events, rangeStartAt, rangeEndAt) {
-  const occurrences = [];
-  (Array.isArray(events) ? events : []).forEach((event) => {
-    if (!event || event.status === "cancelled") {
-      return;
-    }
-    const startAt = Number(event.startAt || 0);
-    if (!startAt) {
-      return;
-    }
-    const repeat = normalizeCalendarClientRepeat(event.repeat);
-    let occurrenceAt = startAt;
-    let guard = 0;
-    while (occurrenceAt && occurrenceAt <= rangeEndAt && guard < 400) {
-      if (occurrenceAt >= rangeStartAt) {
-        occurrences.push({
-          eventId: event.id,
-          at: occurrenceAt,
-          dateKey: formatCalendarDateKey(occurrenceAt),
-          event
-        });
-      }
-      if (repeat.frequency === "none") {
-        break;
-      }
-      occurrenceAt = advanceCalendarClientOccurrence(startAt, repeat, occurrenceAt);
-      guard += 1;
-    }
-  });
-  return occurrences.sort((left, right) => left.at - right.at);
-}
-
-function resetCalendarForm() {
-  activeCalendarEventId = "";
-  const startAt = getCalendarDefaultStartAt();
-  const endAt = startAt + (60 * 60 * 1000);
-  calendarTitleEl.value = "";
-  calendarTypeEl.value = "personal";
-  calendarStartAtEl.value = formatCalendarInputValue(startAt);
-  calendarEndAtEl.value = formatCalendarInputValue(endAt);
-  calendarAllDayEl.checked = false;
-  calendarLocationEl.value = "";
-  calendarDescriptionEl.value = "";
-  calendarRepeatFrequencyEl.value = "none";
-  calendarRepeatIntervalEl.value = "1";
-  calendarActionEnabledEl.checked = false;
-  calendarActionBrainEl.value = calendarActionBrainEl.value || "worker";
-  calendarActionMessageEl.value = "";
-  updateCalendarFormState();
-}
-
-function updateCalendarFormState() {
-  const actionEnabled = calendarActionEnabledEl.checked || calendarTypeEl.value === "nova_action";
-  calendarActionBrainEl.disabled = !actionEnabled;
-  calendarActionMessageEl.disabled = !actionEnabled;
-}
-
-function populateCalendarForm(event) {
-  if (!event) {
-    resetCalendarForm();
-    return;
-  }
-  activeCalendarEventId = String(event.id || "");
-  calendarTitleEl.value = String(event.title || "");
-  calendarTypeEl.value = String(event.type || "personal");
-  calendarStartAtEl.value = formatCalendarInputValue(event.startAt, event.allDay);
-  calendarEndAtEl.value = formatCalendarInputValue(event.endAt, event.allDay);
-  calendarAllDayEl.checked = event.allDay === true;
-  calendarLocationEl.value = String(event.location || "");
-  calendarDescriptionEl.value = String(event.description || "");
-  calendarRepeatFrequencyEl.value = String(event.repeat?.frequency || "none");
-  calendarRepeatIntervalEl.value = String(event.repeat?.interval || 1);
-  calendarActionEnabledEl.checked = event.action?.enabled === true;
-  calendarActionBrainEl.value = String(event.action?.requestedBrainId || "worker");
-  calendarActionMessageEl.value = String(event.action?.message || "");
-  updateCalendarFormState();
-  activateCalendarSubtab("calendarEditPanel");
-}
-
-function renderCalendarDayEvents() {
-  const dayTs = getCalendarSelectedDayTs();
-  const dayStartAt = new Date(dayTs);
-  dayStartAt.setHours(0, 0, 0, 0);
-  const dayEndAt = dayStartAt.getTime() + (24 * 60 * 60 * 1000) - 1;
-  const occurrences = buildCalendarOccurrencesForRange(calendarEvents, dayStartAt.getTime(), dayEndAt)
-    .filter((entry) => entry.dateKey === calendarSelectedDayKey);
-  calendarDayHeadingEl.textContent = formatCalendarAgendaHeading(dayTs);
-  calendarDaySummaryEl.textContent = "";
-  if (!occurrences.length) {
-    calendarDayEventsEl.innerHTML = `<div class="panel-subtle">No events</div>`;
-    return;
-  }
-  calendarDayEventsEl.innerHTML = occurrences.map((entry) => {
-    const event = entry.event;
-    const timeLabel = event.allDay
-      ? "All day"
-      : new Date(entry.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    const actionLabel = event.action?.enabled ? "Nova action" : "Personal";
-    const status = String(event.status || "active");
-    return `
-      <button class="calendar-event-row ${activeCalendarEventId === event.id ? "active" : ""}" data-calendar-event-id="${escapeHtml(event.id)}">
-        <strong>${escapeHtml(event.title || "Untitled event")}</strong>
-        <span>${escapeHtml(timeLabel)} - ${escapeHtml(actionLabel)} - ${escapeHtml(status)}</span>
-      </button>
-    `;
-  }).join("");
-  calendarDayEventsEl.querySelectorAll("[data-calendar-event-id]").forEach((button) => {
-    button.onclick = () => {
-      const event = calendarEvents.find((entry) => String(entry.id || "") === String(button.dataset.calendarEventId || ""));
-      if (event) {
-        populateCalendarForm(event);
-        renderCalendarDayEvents();
-      }
-    };
-  });
-}
-
-function renderCalendarMonth() {
-  const monthStartAt = startOfCalendarMonth(calendarMonthAnchorMs);
-  calendarMonthAnchorMs = monthStartAt;
-  const monthStart = new Date(monthStartAt);
-  calendarMonthLabelEl.textContent = monthStart.toLocaleDateString([], { month: "long", year: "numeric" });
-  const gridStart = new Date(monthStartAt);
-  gridStart.setDate(1 - gridStart.getDay());
-  const gridStartAt = gridStart.getTime();
-  const gridEndAt = gridStartAt + ((42 * 24 * 60 * 60 * 1000) - 1);
-  const occurrences = buildCalendarOccurrencesForRange(calendarEvents, gridStartAt, gridEndAt);
-  const occurrencesByDay = new Map();
-  occurrences.forEach((entry) => {
-    const key = entry.dateKey;
-    if (!occurrencesByDay.has(key)) {
-      occurrencesByDay.set(key, []);
-    }
-    occurrencesByDay.get(key).push(entry);
-  });
-  const todayKey = formatCalendarDateKey(Date.now());
-  if (!calendarSelectedDayKey) {
-    calendarSelectedDayKey = todayKey;
-  }
-  const cells = [];
-  for (let index = 0; index < 42; index += 1) {
-    const cellDate = new Date(gridStartAt + (index * 24 * 60 * 60 * 1000));
-    const dateKey = formatCalendarDateKey(cellDate.getTime());
-    const dayEvents = occurrencesByDay.get(dateKey) || [];
-    const isCurrentMonth = cellDate.getMonth() === monthStart.getMonth();
-    const isToday = dateKey === todayKey;
-    const isSelected = dateKey === calendarSelectedDayKey;
-    cells.push(`
-      <button class="calendar-day-cell ${isCurrentMonth ? "" : "outside"} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" data-calendar-date="${escapeHtml(dateKey)}">
-        <span class="calendar-day-number">${cellDate.getDate()}</span>
-        <span class="calendar-day-count">${dayEvents.length ? `${dayEvents.length} item${dayEvents.length === 1 ? "" : "s"}` : ""}</span>
-        <span class="calendar-day-preview">${escapeHtml(dayEvents.slice(0, 2).map((entry) => entry.event.title || "").join(" • "))}</span>
-      </button>
-    `);
-  }
-  calendarMonthGridEl.innerHTML = cells.join("");
-  calendarMonthGridEl.querySelectorAll("[data-calendar-date]").forEach((button) => {
-    button.onclick = () => {
-      calendarSelectedDayKey = String(button.dataset.calendarDate || "");
-      renderCalendarMonth();
-      renderCalendarDayEvents();
-      activateCalendarSubtab("calendarMonthlyPanel");
-      if (!activeCalendarEventId) {
-        resetCalendarForm();
-      }
-    };
-  });
-  renderCalendarDayEvents();
-}
-
-async function loadCalendarEvents() {
-  calendarHintEl.textContent = "Loading calendar...";
-  try {
-    const r = await fetch("/api/calendar/events");
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "failed to load calendar");
-    }
-    calendarEvents = Array.isArray(j.events) ? j.events : [];
-    if (!calendarSelectedDayKey) {
-      calendarSelectedDayKey = formatCalendarDateKey(Date.now());
-    }
-    activateCalendarSubtab(activeCalendarSubtabId || "calendarDailyPanel");
-    renderCalendarMonth();
-    if (activeCalendarEventId) {
-      const activeEvent = calendarEvents.find((entry) => String(entry.id || "") === activeCalendarEventId);
-      if (activeEvent) {
-        populateCalendarForm(activeEvent);
-      }
-    } else {
-      resetCalendarForm();
-    }
-    calendarHintEl.textContent = `Loaded ${calendarEvents.length} calendar event${calendarEvents.length === 1 ? "" : "s"}.`;
-  } catch (error) {
-    calendarHintEl.textContent = `Calendar load failed: ${error.message}`;
-    calendarMonthGridEl.textContent = "Failed to load calendar.";
-    calendarDayEventsEl.textContent = "Failed to load events.";
-  }
-}
-
 async function pollCronEvents() {
   try {
     const r = await fetch(`/api/cron/events?sinceTs=${encodeURIComponent(String(latestCronEventTs))}&limit=8`);
@@ -1748,6 +1681,10 @@ function annotateNovaEmotion(text, emotion = "") {
   return `[nova:emotion=${normalizedEmotion}] ${raw}`;
 }
 
+function isRepairManagementTask(task) {
+  return String(task?.internalJobType || "").trim().toLowerCase() === "escalation_review";
+}
+
 function buildTaskNarration(task) {
   const taskRef = task.codename || formatEntityRef("task", task.id || "unknown");
   const brainLabel = task.requestedBrainLabel || task.requestedBrainId || "the agent";
@@ -1755,19 +1692,10 @@ function buildTaskNarration(task) {
   const progressNote = String(task.progressNote || "").trim();
   const noteText = String(task.notes || "").trim();
   const abortRequested = Boolean(task.abortRequestedAt);
-  const todoBackedWaiting = String(task?.waitingMode || "").trim().toLowerCase() === "todo"
-    && Boolean(String(task?.todoItemId || "").trim());
   const plainQuestionTask = String(task?.status || "").trim().toLowerCase() === "waiting_for_user"
     && String(task?.internalJobType || "").trim().toLowerCase() === "question_maintenance"
     && Boolean(String(task?.questionForUser || "").trim());
-
-  if (todoBackedWaiting) {
-    return {
-      title: "To do added",
-      displayText: `${taskRef} is blocked on a user action, so I added it to your to do list.\n\n${String(task.todoText || task.questionForUser || noteText || "Follow up needed.").trim()}`,
-      spokenText: annotateNovaEmotion(`${taskRef} is blocked on a user action, so I added it to your to do list. ${String(task.todoText || task.questionForUser || noteText || "Follow up needed.").trim()}`, "shrug")
-    };
-  }
+  const repairManagementTask = isRepairManagementTask(task);
 
   if (task.status === "waiting_for_user") {
     const question = String(task.questionForUser || resultSummary || noteText || "I need a direction before I can continue.").trim();
@@ -1775,6 +1703,24 @@ function buildTaskNarration(task) {
       title: "Question waiting",
       displayText: plainQuestionTask ? question : `${taskRef} is waiting for your direction.\n\n${question}`,
       spokenText: annotateNovaEmotion(plainQuestionTask ? question : `${taskRef} is waiting for your direction. ${question}`, "shrug")
+    };
+  }
+
+  if (repairManagementTask && task.status === "completed") {
+    const detail = resultSummary || noteText || "I finished the repair review and recorded the next recovery step.";
+    return {
+      title: "Repair review",
+      displayText: `${taskRef} finished a repair review.\n\n${detail}`,
+      spokenText: annotateNovaEmotion(`${taskRef} finished a repair review. ${detail}`, "reflect")
+    };
+  }
+
+  if (repairManagementTask && task.status === "failed") {
+    const detail = resultSummary || noteText || "The repair review did not produce a safe next step.";
+    return {
+      title: "Repair review issue",
+      displayText: `${taskRef} hit a problem during repair review.\n\n${detail}`,
+      spokenText: annotateNovaEmotion(`${taskRef} hit a problem during repair review. ${detail}`, "reflect")
     };
   }
 
@@ -1834,11 +1780,16 @@ function buildTaskNarration(task) {
   }
 
   if (abortRequested && task.status === "in_progress") {
-    const detail = progressNote || noteText || "Abort requested. Stopping active work.";
+    const opener = pickTaskPhrase(task, getLanguageVariants("taskNarration.canceledOpeners", [
+      `I've dropped {{taskRef}}.`,
+      `{{taskRef}} is stopping.`,
+      `I pulled {{taskRef}} from the line.`
+    ], { taskRef }));
+    const detail = progressNote || noteText || pickLanguageVariant("taskNarration.canceledFallback", "Abort requested. Stopping active work.");
     return {
       title: "Stopping task",
-      displayText: `${taskRef} is stopping.\n\n${detail}`,
-      spokenText: annotateNovaEmotion(`${taskRef} is stopping. ${detail}`, "angry")
+      displayText: `${opener}\n\n${detail}`,
+      spokenText: annotateNovaEmotion(`${opener} ${detail}`, "angry")
     };
   }
 
@@ -1875,7 +1826,7 @@ function reportTaskEvent(task, explicitTitle = "", options = {}) {
   if (isRemoteParallelMode() && task?.status === "in_progress") {
     return;
   }
-  if (String(task?.waitingMode || "").trim().toLowerCase() === "todo" && String(task?.status || "").trim() === "waiting_for_user") {
+  if (String(task?.internalJobType || "").trim().toLowerCase() === "opportunity_scan") {
     return;
   }
   if (!rememberTaskEvent(task)) {
@@ -1946,115 +1897,10 @@ async function pollTaskEvents() {
   }
 }
 
-function buildMailObservation(message) {
-  const fromLabel = String(message?.fromName || message?.fromAddress || "Someone").trim();
-  const subject = String(message?.subject || "(no subject)").trim();
-  const text = String(message?.text || "").replace(/\s+/g, " ").trim();
-  const preview = text.slice(0, 220).trim();
-  const trust = String(message?.sourceIdentity?.trustLevel || "unknown").trim();
-  const command = message?.command?.detected
-    ? ` Email command ${String(message.command.action || "detected").replaceAll("_", " ")}.`
-    : "";
-  return {
-    displayText: preview
-      ? `${fromLabel} sent a ${trust} message: ${subject}\n\n${preview}${command}`
-      : `${fromLabel} sent a ${trust} message: ${subject}${command}`,
-    spokenText: preview
-      ? `New ${trust} message from ${fromLabel}. ${subject}. ${preview}${command}`
-      : `New ${trust} message from ${fromLabel}. ${subject}.${command}`
-  };
-}
-
-async function loadMailStatus() {
-  try {
-    const r = await fetch("/api/mail/status");
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "mail status unavailable");
-    }
-
-    const ready = Boolean(j.ready);
-    setStatus(mailStatusEl, ready ? "Ready" : (j.enabled ? "Needs config" : "Disabled"), ready ? "tone-ok" : "tone-warn");
-    mailAgentEl.textContent = j.activeAgentLabel && j.activeAgentEmail
-      ? `${j.activeAgentLabel} <${j.activeAgentEmail}>`
-      : (j.activeAgentLabel || j.activeAgentEmail || "-");
-    mailDestinationSummaryEl.textContent = "Direct email";
-    mailCheckedAtEl.textContent = j.lastCheckAt ? formatTime(j.lastCheckAt) : "Never";
-    mailHintEl.textContent = j.lastError
-      ? j.lastError
-      : (ready
-        ? `Mailbox is configured. Showing ${Number(j.recentMessageCount || 0)} recent inbox ${Number(j.recentMessageCount || 0) === 1 ? "message" : "messages"}. Trusted sources: ${Number(j.trustedSourceCount || 0)}. Known sources: ${Number(j.knownSourceCount || 0)}. Email commands need ${trustLevelLabel(j.emailCommandMinLevel || "trusted")}.`
-        : "Store the active agent mailbox password in the Nova secure keystore to enable IMAP and SMTP.");
-    if (mailSummariesEnabledEl) {
-      mailSummariesEnabledEl.checked = j.sendSummariesEnabled !== false;
-      mailSummariesEnabledEl.disabled = !ready;
-    }
-
-    mailToEmailEl.disabled = !ready;
-    mailSubjectEl.disabled = !ready;
-    mailBodyEl.disabled = !ready;
-    mailSendBtn.disabled = !ready;
-    mailPollBtn.disabled = !ready;
-
-    renderMailMessages(Array.isArray(j.messages) ? j.messages : []);
-  } catch (error) {
-    setStatus(mailStatusEl, "Unavailable", "tone-bad");
-    mailAgentEl.textContent = "-";
-    mailDestinationSummaryEl.textContent = "-";
-    mailCheckedAtEl.textContent = "Error";
-    mailHintEl.textContent = `Mail status failed: ${error.message}`;
-    if (mailSummariesEnabledEl) {
-      mailSummariesEnabledEl.checked = true;
-      mailSummariesEnabledEl.disabled = true;
-    }
-    mailToEmailEl.disabled = true;
-    mailSubjectEl.disabled = true;
-    mailBodyEl.disabled = true;
-    mailSendBtn.disabled = true;
-    mailPollBtn.disabled = true;
-    renderMailMessages([]);
-  }
-}
-
-async function pollMailInbox() {
-  const r = await fetch("/api/mail/poll", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({})
-  });
-  const j = await r.json();
-  if (!r.ok || !j.ok) {
-    throw new Error(j.error || "mail poll failed");
-  }
-  await loadMailStatus();
-  return j;
-}
-
-async function sendMailMessage() {
-  const toEmail = String(mailToEmailEl.value || "").trim();
-  const subject = String(mailSubjectEl.value || "").trim();
-  const text = String(mailBodyEl.value || "").trim();
-  if (!toEmail || !text) {
-    throw new Error("Enter a destination email and message.");
-  }
-  const r = await fetch("/api/mail/send", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ toEmail, subject, text })
-  });
-  const j = await r.json();
-  if (!r.ok || !j.ok) {
-    throw new Error(j.error || "mail send failed");
-  }
-  mailToEmailEl.value = "";
-  mailSubjectEl.value = "";
-  mailBodyEl.value = "";
-  mailHintEl.textContent = "Message sent.";
-  await loadMailStatus();
-  return j;
-}
-
 async function loadFile(file) {
+  if (!hasCoreStateBrowserUi()) {
+    return;
+  }
   const scope = scopeSelect.value;
   activeFileKey = file;
   selectedFileEl.value = file;
@@ -2129,6 +1975,7 @@ async function refreshStatus() {
       }).join("");
     }
     const brainActivity = Array.isArray(j.brainActivity) ? j.brainActivity : [];
+    lastBrainActivity = brainActivity;
     if (!brainActivity.length) {
       brainLoadStatusEl.innerHTML = `<div class="panel-subtle">No brain activity available.</div>`;
     } else {
@@ -2183,6 +2030,7 @@ async function refreshStatus() {
         `;
       }).join("");
     }
+    updateRemotePlannerHealthIndicator(brainActivity);
     updateRunButtonState();
   } catch (error) {
     setStatus(gatewayStatusEl, "Status check failed", "tone-bad");
@@ -2334,50 +2182,24 @@ function applyAppConfigToStage(appConfig = {}) {
 }
 
 function renderNovaConfigEditor() {
-  if (!novaIdentitySettingsListEl || !novaTrustSettingsListEl || !novaEnvironmentSettingsListEl || !novaPropsSettingsListEl) {
+  if (!novaIdentitySettingsListEl || !novaTrustSettingsListEl) {
     return;
   }
   if (!novaConfigDraft?.app) {
     const unavailable = `<div class="panel-subtle">Nova settings are unavailable.</div>`;
     novaIdentitySettingsListEl.innerHTML = unavailable;
     novaTrustSettingsListEl.innerHTML = unavailable;
-    novaEnvironmentSettingsListEl.innerHTML = unavailable;
-    novaPropsSettingsListEl.innerHTML = unavailable;
     return;
   }
   const app = novaConfigDraft.app;
   const assets = novaConfigDraft.assets && typeof novaConfigDraft.assets === "object" ? novaConfigDraft.assets : {};
   const modelOptions = Array.isArray(assets.characters) ? assets.characters : [];
-  const backgroundOptions = Array.isArray(assets.skies) ? assets.skies : [];
-  const textureOptions = Array.isArray(assets.textures) ? assets.textures : [];
-  const propOptions = Array.isArray(assets.props) ? assets.props : [];
   const selectedModelPath = String(app.avatarModelPath || "").trim();
-  const selectedBackgroundPath = String(app.backgroundImagePath || "").trim();
-  const selectedStylizationFilterPreset = String(app.stylizationFilterPreset || app.stylizationPreset || "none").trim().toLowerCase() || "none";
-  const selectedStylizationEffectPreset = String(app.stylizationEffectPreset || app.stylizationPreset || "none").trim().toLowerCase() || "none";
   const reactionProfile = getReactionProfileDraft(app, selectedModelPath);
-  const roomTextures = app.roomTextures && typeof app.roomTextures === "object" ? app.roomTextures : {};
-  const propSlots = app.propSlots && typeof app.propSlots === "object" ? app.propSlots : {};
   const trust = app.trust && typeof app.trust === "object"
     ? app.trust
     : { emailCommandMinLevel: "trusted", voiceCommandMinLevel: "trusted", records: [], emailSources: [], voiceProfiles: [] };
   const trustRecords = Array.isArray(trust.records) ? trust.records : [];
-  const textureFieldLabels = {
-    walls: "Walls",
-    floor: "Floor",
-    ceiling: "Roof",
-    windowFrame: "Window frame"
-  };
-  const propFieldLabels = {
-    backWallLeft: "Back wall A",
-    backWallRight: "Back wall B",
-    wallLeft: "Wall slot A",
-    wallRight: "Wall slot B",
-    besideLeft: "Beside Nova A",
-    besideRight: "Beside Nova B",
-    outsideLeft: "Outside window A",
-    outsideRight: "Outside window B"
-  };
   const renderAssetOptions = (options, selectedValue, emptyLabel = "") => {
     const normalizedOptions = options.map((value) => String(value || "").trim()).filter(Boolean);
     const withSelected = selectedValue && !normalizedOptions.includes(selectedValue)
@@ -2505,66 +2327,9 @@ function renderNovaConfigEditor() {
       </div>
     </section>
   `;
-  novaEnvironmentSettingsListEl.innerHTML = `
-    <label class="stack-field">
-      <strong>Background image</strong>
-      <span class="micro">Choose from PNG files in <code>public/assets</code>, or leave it on the built-in rotating sky.</span>
-      <select data-nova-field="backgroundImagePath">${renderAssetOptions(backgroundOptions, selectedBackgroundPath, "Built-in rotating sky")}</select>
-    </label>
-    <label class="stack-field">
-      <strong>Filter Layer</strong>
-      <span class="micro">Canvas-level grade and color treatment.</span>
-      <select data-nova-field="stylizationFilterPreset">
-        <option value="none" ${selectedStylizationFilterPreset === "none" ? "selected" : ""}>None</option>
-        <option value="soft" ${selectedStylizationFilterPreset === "soft" ? "selected" : ""}>Soft</option>
-        <option value="cinematic" ${selectedStylizationFilterPreset === "cinematic" ? "selected" : ""}>Cinematic</option>
-        <option value="noir" ${selectedStylizationFilterPreset === "noir" ? "selected" : ""}>Noir</option>
-        <option value="vivid" ${selectedStylizationFilterPreset === "vivid" ? "selected" : ""}>Vivid</option>
-        <option value="dream" ${selectedStylizationFilterPreset === "dream" ? "selected" : ""}>Dream Grade</option>
-        <option value="retro_vhs" ${selectedStylizationFilterPreset === "retro_vhs" ? "selected" : ""}>Retro VHS Grade</option>
-        <option value="haunted" ${selectedStylizationFilterPreset === "haunted" ? "selected" : ""}>Haunted</option>
-        <option value="surveillance" ${selectedStylizationFilterPreset === "surveillance" ? "selected" : ""}>Surveillance</option>
-        <option value="crystal" ${selectedStylizationFilterPreset === "crystal" ? "selected" : ""}>Crystal</option>
-        <option value="whimsical" ${selectedStylizationFilterPreset === "whimsical" ? "selected" : ""}>Whimsical</option>
-      </select>
-    </label>
-    <label class="stack-field">
-      <strong>Effect Layer</strong>
-      <span class="micro">Renderer/postprocessing effects like toon, bloom, or VHS noise.</span>
-      <select data-nova-field="stylizationEffectPreset">
-        <option value="none" ${selectedStylizationEffectPreset === "none" ? "selected" : ""}>None</option>
-        <option value="toon" ${selectedStylizationEffectPreset === "toon" ? "selected" : ""}>Toon</option>
-        <option value="dream" ${selectedStylizationEffectPreset === "dream" ? "selected" : ""}>Dream</option>
-        <option value="retro_vhs" ${selectedStylizationEffectPreset === "retro_vhs" ? "selected" : ""}>Retro VHS</option>
-        <option value="whimsical" ${selectedStylizationEffectPreset === "whimsical" ? "selected" : ""}>Whimsical</option>
-      </select>
-    </label>
-    <div class="stack-list">
-      ${Object.entries(textureFieldLabels).map(([field, label]) => `
-        <label class="stack-field">
-          <strong>${escapeHtml(label)}</strong>
-          <select data-nova-room-texture="${escapeAttr(field)}">${renderAssetOptions(textureOptions, String(roomTextures?.[field] || "").trim(), "Use material color")}</select>
-        </label>
-      `).join("")}
-    </div>
-  `;
-  novaPropsSettingsListEl.innerHTML = `
-    <div class="stack-list">
-      ${Object.entries(propFieldLabels).map(([field, label]) => `
-        <div class="stack-field">
-          <strong>${escapeHtml(label)}</strong>
-          <select data-nova-prop-slot="${escapeAttr(field)}">${renderAssetOptions(propOptions, String((propSlots?.[field] && typeof propSlots[field] === "object" ? propSlots[field].model : propSlots?.[field]) || "").trim(), "Empty slot")}</select>
-          <input type="range" min="0.2" max="3" step="0.05" data-nova-prop-scale="${escapeAttr(field)}" value="${escapeAttr(String(Number((propSlots?.[field] && typeof propSlots[field] === "object" ? propSlots[field].scale : 1) || 1).toFixed(2)))}" />
-          <div class="micro" id="novaPropScaleValue-${escapeAttr(field)}">${escapeHtml(`${Number((propSlots?.[field] && typeof propSlots[field] === "object" ? propSlots[field].scale : 1) || 1).toFixed(2)}x`)}</div>
-        </div>
-      `).join("")}
-    </div>
-  `;
   const novaSettingsRootEls = [
     novaIdentitySettingsListEl,
-    novaTrustSettingsListEl,
-    novaEnvironmentSettingsListEl,
-    novaPropsSettingsListEl
+    novaTrustSettingsListEl
   ];
   novaSettingsRootEls.forEach((rootEl) => {
     rootEl.querySelectorAll("[data-nova-field]").forEach((input) => {
@@ -2615,57 +2380,6 @@ function renderNovaConfigEditor() {
         const profile = getReactionProfileDraft(novaConfigDraft?.app, selectedModelPath);
         profile.paths = parseReactionPathsTextarea(input.value || "");
         profile.idleClip = String(profile.paths.idle || profile.idleClip || "").trim();
-      };
-    });
-    rootEl.querySelectorAll("[data-nova-room-texture]").forEach((input) => {
-      input.onchange = () => {
-        const field = String(input.dataset.novaRoomTexture || "").trim();
-        if (!field || !novaConfigDraft?.app) {
-          return;
-        }
-        if (!novaConfigDraft.app.roomTextures || typeof novaConfigDraft.app.roomTextures !== "object") {
-          novaConfigDraft.app.roomTextures = {};
-        }
-        novaConfigDraft.app.roomTextures[field] = String(input.value || "");
-      };
-    });
-    rootEl.querySelectorAll("[data-nova-prop-slot]").forEach((input) => {
-      input.onchange = () => {
-        const field = String(input.dataset.novaPropSlot || "").trim();
-        if (!field || !novaConfigDraft?.app) {
-          return;
-        }
-        if (!novaConfigDraft.app.propSlots || typeof novaConfigDraft.app.propSlots !== "object") {
-          novaConfigDraft.app.propSlots = {};
-        }
-        const current = novaConfigDraft.app.propSlots[field];
-        const scale = current && typeof current === "object" ? Number(current.scale || 1) : 1;
-        novaConfigDraft.app.propSlots[field] = {
-          model: String(input.value || ""),
-          scale
-        };
-      };
-    });
-    rootEl.querySelectorAll("[data-nova-prop-scale]").forEach((input) => {
-      input.oninput = () => {
-        const field = String(input.dataset.novaPropScale || "").trim();
-        if (!field || !novaConfigDraft?.app) {
-          return;
-        }
-        if (!novaConfigDraft.app.propSlots || typeof novaConfigDraft.app.propSlots !== "object") {
-          novaConfigDraft.app.propSlots = {};
-        }
-        const current = novaConfigDraft.app.propSlots[field];
-        const model = current && typeof current === "object" ? String(current.model || "") : "";
-        const scale = Number(input.value || 1);
-        novaConfigDraft.app.propSlots[field] = {
-          model,
-          scale
-        };
-        const valueEl = document.getElementById(`novaPropScaleValue-${field}`);
-        if (valueEl) {
-          valueEl.textContent = `${scale.toFixed(2)}x`;
-        }
       };
     });
   });
@@ -2801,13 +2515,16 @@ async function loadNovaConfig() {
     novaConfigDraft = cloneJson(j);
     renderNovaConfigEditor();
     applyAppConfigToStage(novaConfigDraft.app || {});
+    await observerApp.refreshPluginNovaTabs?.({ silent: true });
     novaHintEl.textContent = "Nova settings loaded.";
   } catch (error) {
     novaConfigDraft = null;
     renderNovaConfigEditor();
+    await observerApp.refreshPluginNovaTabs?.({ silent: true });
     novaHintEl.textContent = `Failed to load Nova settings: ${error.message}`;
   }
 }
+
 
 async function saveNovaConfig() {
   if (!novaConfigDraft?.app || !novaHintEl || !saveNovaBtn) {
@@ -2820,7 +2537,7 @@ async function saveNovaConfig() {
   saveNovaBtn.disabled = true;
   novaHintEl.textContent = "Saving Nova settings...";
   try {
-    const r = await fetch("/api/app/config", {
+    const r = await pluginAdminFetch("/api/app/config", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ app: novaConfigDraft.app })
@@ -2865,6 +2582,35 @@ function getDraftBrainRecords() {
       builtIn: false
     }))
   ];
+}
+
+function syncBuiltInBrainOverrides() {
+  if (!brainConfigDraft?.brains) {
+    return;
+  }
+  const builtInBrains = Array.isArray(brainConfigDraft.builtInBrains) ? brainConfigDraft.builtInBrains : [];
+  brainConfigDraft.brains.builtIn = builtInBrains
+    .map((brain) => ({
+      id: String(brain?.id || "").trim(),
+      model: String(brain?.model || "").trim()
+    }))
+    .filter((brain) => brain.id);
+}
+
+function updateRemotePlannerHealthIndicator(brainActivity) {
+  const selectedId = brainConfigDraft?.routing?.remoteTriageBrainId || "";
+  const routingTabBtn = document.querySelector('[data-brain-subtab-target="brainsRoutingPanel"]');
+  if (!selectedId) {
+    remotePlannerSelectEl?.classList.remove("input-warn");
+    routingTabBtn?.classList.remove("has-alert");
+    return;
+  }
+  const entry = Array.isArray(brainActivity)
+    ? brainActivity.find((b) => String(b.id || "") === selectedId)
+    : null;
+  const isUnhealthy = !entry || entry.endpointHealthy === false;
+  remotePlannerSelectEl?.classList.toggle("input-warn", isUnhealthy);
+  routingTabBtn?.classList.toggle("has-alert", isUnhealthy);
 }
 
 function renderBrainConfigEditor() {
@@ -2916,6 +2662,39 @@ function renderBrainConfigEditor() {
         <span class="micro">Endpoint</span>
         <select data-assignment-brain="${escapeAttr(brain.id)}">${endpointOptions}</select>
       </label>
+    </div>
+  `).join("");
+
+  brainAssignmentsListEl.innerHTML = builtInBrains.map((brain) => `
+    <div class="brain-row">
+      <div class="brain-row-actions">
+        <label class="toggle">
+          <input
+            type="checkbox"
+            data-built-in-brain="${escapeAttr(brain.id)}"
+            data-built-in-field="enabled"
+            ${enabledIds.has(brain.id) ? "checked" : ""}
+          />
+          <span>
+            <strong>${escapeHtml(brain.label)}</strong>
+            <div class="micro">${escapeHtml(brain.id)} - ${escapeHtml(brain.description || brain.kind)}</div>
+          </span>
+        </label>
+      </div>
+      <div class="brain-row-grid">
+        <label class="stack-field">
+          <span class="micro">Model</span>
+          <input
+            data-built-in-brain="${escapeAttr(brain.id)}"
+            data-built-in-field="model"
+            value="${escapeAttr(brain.model || "")}"
+          />
+        </label>
+        <label class="stack-field">
+          <span class="micro">Endpoint</span>
+          <select data-assignment-brain="${escapeAttr(brain.id)}">${endpointOptions}</select>
+        </label>
+      </div>
     </div>
   `).join("");
 
@@ -3012,6 +2791,39 @@ function renderBrainConfigEditor() {
     };
   });
 
+  brainAssignmentsListEl.querySelectorAll("[data-built-in-brain]").forEach((input) => {
+    const brainId = input.dataset.builtInBrain;
+    const field = input.dataset.builtInField;
+    input.onchange = () => {
+      const brain = Array.isArray(brainConfigDraft.builtInBrains)
+        ? brainConfigDraft.builtInBrains.find((entry) => entry.id === brainId)
+        : null;
+      if (!brain) {
+        return;
+      }
+      if (field === "enabled") {
+        const enabled = new Set(brainConfigDraft.brains.enabledIds || []);
+        if (input.checked) {
+          enabled.add(brain.id);
+        } else {
+          enabled.delete(brain.id);
+          if (brainConfigDraft.routing?.remoteTriageBrainId === brain.id) {
+            brainConfigDraft.routing.remoteTriageBrainId = "";
+            if (remotePlannerSelectEl) {
+              remotePlannerSelectEl.value = "";
+            }
+          }
+        }
+        brainConfigDraft.brains.enabledIds = [...enabled];
+        return;
+      }
+      if (field === "model") {
+        brain.model = String(input.value || "").trim();
+        syncBuiltInBrainOverrides();
+      }
+    };
+  });
+
   brainEndpointsListEl.querySelectorAll("[data-endpoint-id]").forEach((row) => {
     const endpointId = row.dataset.endpointId;
     row.querySelectorAll("[data-endpoint-field]").forEach((input) => {
@@ -3082,6 +2894,9 @@ function renderBrainConfigEditor() {
             enabled.delete(brain.id);
             if (brainConfigDraft.routing?.remoteTriageBrainId === brain.id) {
               brainConfigDraft.routing.remoteTriageBrainId = "";
+              if (remotePlannerSelectEl) {
+                remotePlannerSelectEl.value = "";
+              }
             }
           }
           brainConfigDraft.brains.enabledIds = [...enabled];
@@ -3138,7 +2953,10 @@ function renderBrainConfigEditor() {
   routingEnabledToggleEl.onchange = () => { brainConfigDraft.routing.enabled = routingEnabledToggleEl.checked; };
   remoteParallelToggleEl.onchange = () => { brainConfigDraft.queue.remoteParallel = remoteParallelToggleEl.checked; };
   escalationEnabledToggleEl.onchange = () => { brainConfigDraft.queue.escalationEnabled = escalationEnabledToggleEl.checked; };
-  remotePlannerSelectEl.onchange = () => { brainConfigDraft.routing.remoteTriageBrainId = remotePlannerSelectEl.value; };
+  remotePlannerSelectEl.onchange = () => {
+    brainConfigDraft.routing.remoteTriageBrainId = remotePlannerSelectEl.value;
+    updateRemotePlannerHealthIndicator(lastBrainActivity);
+  };
   routingFallbackAttemptsEl.onchange = () => {
     brainConfigDraft.routing.fallbackAttempts = Math.max(0, Math.min(Number(routingFallbackAttemptsEl.value || 0), 4));
   };
@@ -3150,6 +2968,7 @@ function renderBrainConfigEditor() {
         .filter(Boolean);
     };
   });
+  updateRemotePlannerHealthIndicator(lastBrainActivity);
 }
 
 async function loadBrainConfig() {
@@ -3180,7 +2999,7 @@ function addBrainEndpointDraft() {
   }
   brainConfigDraft.brains.endpoints[endpointId] = {
     label: `LAN Ollama ${index}`,
-    baseUrl: `http://192.168.0.${70 + index}:11434`
+    baseUrl: `http://192.168.1.${100 + index}:11434`
   };
   renderBrainConfigEditor();
 }
@@ -3221,17 +3040,19 @@ async function saveBrainConfig() {
   saveBrainsBtn.disabled = true;
   brainsHintEl.textContent = "Saving brain configuration...";
   try {
+    syncBuiltInBrainOverrides();
     const payload = {
       brains: {
         enabledIds: brainConfigDraft.brains?.enabledIds || [],
         endpoints: brainConfigDraft.brains?.endpoints || {},
         assignments: brainConfigDraft.brains?.assignments || {},
-        custom: brainConfigDraft.brains?.custom || []
+        custom: brainConfigDraft.brains?.custom || [],
+        builtIn: brainConfigDraft.brains?.builtIn || []
       },
       routing: brainConfigDraft.routing || {},
       queue: brainConfigDraft.queue || {}
     };
-    const r = await fetch("/api/brains/config", {
+    const r = await pluginAdminFetch("/api/brains/config", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload)
@@ -3279,9 +3100,10 @@ function renderToolConfigEditor() {
           <span class="brain-pill">${escapeHtml(tool.defaultApproved !== false ? "default on" : "default off")}</span>
         </div>
         <div class="micro">${escapeHtml(tool.description || "No description.")}</div>
+        <div class="micro">${escapeHtml(tool.source === "plugin" ? `Owned by plugin: ${tool.pluginName || tool.pluginId || "unknown"}` : "Owned by core system")}</div>
       </div>
     `).join("")
-    : `<div class="panel-subtle">No built-in tools available.</div>`;
+    : `<div class="panel-subtle">No tools are currently available.</div>`;
 
   installedSkillsListEl.innerHTML = installedSkills.length
     ? installedSkills.map((skill, index) => `
@@ -3435,765 +3257,1735 @@ async function saveToolConfig() {
   }
 }
 
-function projectDurationToDisplay(value, unit = "ms") {
-  const raw = Number(value || 0);
-  if (unit === "hours") return String((raw / (60 * 60 * 1000)).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1"));
-  if (unit === "seconds") return String((raw / 1000).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1"));
-  if (unit === "days") return String((raw / (24 * 60 * 60 * 1000)).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1"));
-  return String(raw);
-}
+let pluginCatalogDraft = null;
+let pluginPermissionRulesDraft = null;
+let pluginTaskLifecycleLastTaskId = "";
+let pluginDynamicPanelDraftByKey = new Map();
+let pluginDynamicPanelIndex = new Map();
+let pluginDynamicPanelEventsBound = false;
+let pluginAdminTokenCache = "";
+let pluginTopLevelTabModuleByScript = new Map();
+let pluginNovaTabModuleByScript = new Map();
+let pluginSecretsTabModuleByScript = new Map();
 
-function projectDisplayToDuration(value, unit = "ms") {
-  const numeric = Number(value || 0);
-  if (!Number.isFinite(numeric)) {
-    return 0;
+async function getAdminUiToken(forceRefresh = false) {
+  if (!forceRefresh && pluginAdminTokenCache) {
+    return pluginAdminTokenCache;
   }
-  if (unit === "hours") return Math.round(numeric * 60 * 60 * 1000);
-  if (unit === "seconds") return Math.round(numeric * 1000);
-  if (unit === "days") return Math.round(numeric * 24 * 60 * 60 * 1000);
-  return Math.round(numeric);
+  const tokenRes = await fetch("/api/admin-token");
+  const tokenJson = await tokenRes.json().catch(() => ({}));
+  const token = String(tokenJson?.token || "").trim();
+  if (!token) {
+    throw new Error(tokenJson?.error || "admin token unavailable");
+  }
+  pluginAdminTokenCache = token;
+  return token;
 }
 
-function renderProjectConfigEditor() {
-  if (!projectConfigDraft) {
-    projectsOverviewSelectEl.innerHTML = `<option value="">Project overview unavailable</option>`;
-    projectsOverviewSelectEl.disabled = true;
-    projectsOverviewListEl.innerHTML = `<div class="panel-subtle">Project overview unavailable.</div>`;
-    projectsCompletedListEl.innerHTML = `<div class="panel-subtle">Completed project jobs unavailable.</div>`;
-    projectsSettingsListEl.innerHTML = `<div class="panel-subtle">Project configuration unavailable.</div>`;
-    projectsStateSummaryEl.innerHTML = `<div class="panel-subtle">Project state unavailable.</div>`;
-    projectsWorkspaceListEl.innerHTML = `<div class="panel-subtle">Project state unavailable.</div>`;
-    projectsActiveTasksListEl.innerHTML = `<div class="panel-subtle">Project state unavailable.</div>`;
-    projectsFailuresListEl.innerHTML = `<div class="panel-subtle">Project state unavailable.</div>`;
-    projectsPoliciesListEl.innerHTML = `<div class="panel-subtle">Project state unavailable.</div>`;
+async function pluginAdminFetch(url = "", options = {}) {
+  const token = await getAdminUiToken();
+  const headers = {
+    ...(options?.headers && typeof options.headers === "object" ? options.headers : {}),
+    "x-admin-token": token
+  };
+  return fetch(url, {
+    ...options,
+    headers
+  });
+}
+
+function getInstalledPlugins() {
+  return Array.isArray(pluginCatalogDraft?.plugins)
+    ? pluginCatalogDraft.plugins.filter((plugin) => plugin && typeof plugin === "object")
+    : [];
+}
+
+function isPluginInstalled(pluginId = "") {
+  const normalizedId = String(pluginId || "").trim().toLowerCase();
+  if (!normalizedId) {
+    return false;
+  }
+  return getInstalledPlugins().some((plugin) =>
+    String(plugin.id || "").trim().toLowerCase() === normalizedId
+    && plugin.enabled !== false
+  );
+}
+
+function normalizePluginUiToken(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizePluginUiTabs() {
+  const tabs = Array.isArray(pluginCatalogDraft?.uiTabs)
+    ? pluginCatalogDraft.uiTabs
+    : [];
+  return tabs
+    .filter((tab) => tab && typeof tab === "object")
+    .map((tab) => ({
+      id: normalizePluginUiToken(tab.id || tab.name || tab.title),
+      pluginId: normalizePluginUiToken(tab.pluginId || ""),
+      title: String(tab.title || tab.id || "Plugin").trim() || "Plugin",
+      icon: String(tab.icon || tab.title || "P").trim().slice(0, 4) || "P",
+      order: Number.isFinite(Number(tab.order)) ? Number(tab.order) : 100,
+      scriptUrl: String(tab.scriptUrl || tab.script || "").trim(),
+      enabled: tab.enabled !== false
+    }))
+    .filter((tab) => tab.id && tab.pluginId && tab.scriptUrl && tab.scriptUrl.startsWith("/") && tab.enabled !== false && isPluginInstalled(tab.pluginId))
+    .sort((left, right) => {
+      const orderDelta = Number(left.order || 100) - Number(right.order || 100);
+      if (orderDelta !== 0) {
+        return orderDelta;
+      }
+      return String(left.title || left.id).localeCompare(String(right.title || right.id));
+    });
+}
+
+function normalizePluginUiSecretsTabs() {
+  const tabs = Array.isArray(pluginCatalogDraft?.uiSecretsTabs)
+    ? pluginCatalogDraft.uiSecretsTabs
+    : [];
+  return tabs
+    .filter((tab) => tab && typeof tab === "object")
+    .map((tab) => ({
+      id: normalizePluginUiToken(tab.id || tab.name || tab.title),
+      pluginId: normalizePluginUiToken(tab.pluginId || ""),
+      title: String(tab.title || tab.id || "Plugin").trim() || "Plugin",
+      order: Number.isFinite(Number(tab.order)) ? Number(tab.order) : 100,
+      scriptUrl: String(tab.scriptUrl || tab.script || "").trim(),
+      enabled: tab.enabled !== false
+    }))
+    .filter((tab) => tab.id && tab.pluginId && tab.scriptUrl && tab.scriptUrl.startsWith("/") && tab.enabled !== false && isPluginInstalled(tab.pluginId))
+    .sort((left, right) => {
+      const orderDelta = Number(left.order || 100) - Number(right.order || 100);
+      if (orderDelta !== 0) {
+        return orderDelta;
+      }
+      return String(left.title || left.id).localeCompare(String(right.title || right.id));
+    });
+}
+
+function normalizePluginUiNovaTabs() {
+  const tabs = Array.isArray(pluginCatalogDraft?.uiNovaTabs)
+    ? pluginCatalogDraft.uiNovaTabs
+    : [];
+  return tabs
+    .filter((tab) => tab && typeof tab === "object")
+    .map((tab) => ({
+      id: normalizePluginUiToken(tab.id || tab.name || tab.title),
+      pluginId: normalizePluginUiToken(tab.pluginId || ""),
+      title: String(tab.title || tab.id || "Plugin").trim() || "Plugin",
+      order: Number.isFinite(Number(tab.order)) ? Number(tab.order) : 100,
+      scriptUrl: String(tab.scriptUrl || tab.script || "").trim(),
+      enabled: tab.enabled !== false
+    }))
+    .filter((tab) => tab.id && tab.pluginId && tab.scriptUrl && tab.scriptUrl.startsWith("/") && tab.enabled !== false && isPluginInstalled(tab.pluginId))
+    .sort((left, right) => {
+      const orderDelta = Number(left.order || 100) - Number(right.order || 100);
+      if (orderDelta !== 0) {
+        return orderDelta;
+      }
+      return String(left.title || left.id).localeCompare(String(right.title || right.id));
+    });
+}
+
+async function mountPluginTopLevelTab(tab = {}, mountEl = null) {
+  if (!tab.scriptUrl || !(mountEl instanceof HTMLElement)) {
+    return;
+  }
+  const cacheKey = String(tab.scriptUrl || "").trim();
+  if (!cacheKey) {
+    return;
+  }
+  let moduleExports = pluginTopLevelTabModuleByScript.get(cacheKey);
+  if (!moduleExports) {
+    moduleExports = await import(`${cacheKey}${cacheKey.includes("?") ? "&" : "?"}v=${Date.now()}`);
+    pluginTopLevelTabModuleByScript.set(cacheKey, moduleExports);
+  }
+  if (typeof moduleExports?.mountPluginTab === "function") {
+    await moduleExports.mountPluginTab({
+      tab,
+      root: mountEl,
+      observerApp: window.ObserverApp || {},
+      pluginAdminFetch
+    });
+  }
+}
+
+async function mountPluginSecretsTab(tab = {}, mountEl = null) {
+  if (!tab.scriptUrl || !(mountEl instanceof HTMLElement)) {
+    return;
+  }
+  const cacheKey = String(tab.scriptUrl || "").trim();
+  if (!cacheKey) {
+    return;
+  }
+  let moduleExports = pluginSecretsTabModuleByScript.get(cacheKey);
+  if (!moduleExports) {
+    moduleExports = await import(`${cacheKey}${cacheKey.includes("?") ? "&" : "?"}v=${Date.now()}`);
+    pluginSecretsTabModuleByScript.set(cacheKey, moduleExports);
+  }
+  if (typeof moduleExports?.mountPluginTab === "function") {
+    await moduleExports.mountPluginTab({
+      tab,
+      root: mountEl,
+      observerApp: window.ObserverApp || {},
+      pluginAdminFetch
+    });
+  }
+}
+
+async function mountPluginNovaTab(tab = {}, mountEl = null) {
+  if (!tab.scriptUrl || !(mountEl instanceof HTMLElement)) {
+    return;
+  }
+  const cacheKey = String(tab.scriptUrl || "").trim();
+  if (!cacheKey) {
+    return;
+  }
+  let moduleExports = pluginNovaTabModuleByScript.get(cacheKey);
+  if (!moduleExports) {
+    moduleExports = await import(`${cacheKey}${cacheKey.includes("?") ? "&" : "?"}v=${Date.now()}`);
+    pluginNovaTabModuleByScript.set(cacheKey, moduleExports);
+  }
+  if (typeof moduleExports?.mountPluginTab === "function") {
+    await moduleExports.mountPluginTab({
+      tab,
+      root: mountEl,
+      observerApp: window.ObserverApp || {},
+      pluginAdminFetch
+    });
+  }
+}
+
+async function refreshPluginNovaTabs(options = {}) {
+  const tabs = normalizePluginUiNovaTabs();
+  for (const tab of tabs) {
+    const panelId = `pluginNovaTab_${tab.pluginId}_${tab.id}`.replace(/[^a-z0-9_-]+/gi, "_");
+    const mountEl = document.getElementById(`${panelId}_mount`);
+    if (!(mountEl instanceof HTMLElement)) {
+      continue;
+    }
+    const cacheKey = String(tab.scriptUrl || "").trim();
+    const moduleExports = cacheKey ? pluginNovaTabModuleByScript.get(cacheKey) : null;
+    if (typeof moduleExports?.refreshPluginTab === "function") {
+      try {
+        await moduleExports.refreshPluginTab({
+          tab,
+          root: mountEl,
+          observerApp: window.ObserverApp || {},
+          pluginAdminFetch,
+          options
+        });
+      } catch {
+        // Plugin refresh should not block the rest of the UI.
+      }
+    }
+  }
+}
+
+async function refreshPluginSecretsTabs(options = {}) {
+  const tabs = normalizePluginUiSecretsTabs();
+  for (const tab of tabs) {
+    const panelId = `pluginSecretsTab_${tab.pluginId}_${tab.id}`.replace(/[^a-z0-9_-]+/gi, "_");
+    const mountEl = document.getElementById(`${panelId}_mount`);
+    if (!(mountEl instanceof HTMLElement)) {
+      continue;
+    }
+    const cacheKey = String(tab.scriptUrl || "").trim();
+    const moduleExports = cacheKey ? pluginSecretsTabModuleByScript.get(cacheKey) : null;
+    if (typeof moduleExports?.refreshPluginTab === "function") {
+      try {
+        await moduleExports.refreshPluginTab({
+          tab,
+          root: mountEl,
+          observerApp: window.ObserverApp || {},
+          pluginAdminFetch,
+          options
+        });
+      } catch {
+        // Plugin refresh should not block the rest of the UI.
+      }
+    }
+  }
+}
+
+async function renderPluginTopLevelTabs() {
+  if (!tabBarEl || !(panelDrawerEl instanceof HTMLElement)) {
+    return;
+  }
+  const tabs = normalizePluginUiTabs();
+  const drawerContentEl = panelDrawerEl.querySelector(".drawer-content");
+  if (!(drawerContentEl instanceof HTMLElement)) {
+    return;
+  }
+  const existingButtons = Array.from(tabBarEl.querySelectorAll("[data-plugin-top-level-tab='true']"));
+  const existingPanels = Array.from(document.querySelectorAll(".tab-panel[data-plugin-top-level-tab='true']"));
+  existingButtons.forEach((button) => button.remove());
+  existingPanels.forEach((panel) => {
+    if (panel.classList.contains("active")) {
+      activateTab("novaTab");
+    }
+    panel.remove();
+  });
+
+  if (!tabs.length) {
     return;
   }
 
-  const projects = projectConfigDraft.projects || {};
-  const state = projectConfigDraft.state || {};
-  const summary = state.summary || {};
-  const projectPanels = Array.isArray(state.projectPanels) ? state.projectPanels : [];
-  const workspaceProjects = Array.isArray(state.workspaceProjects) ? state.workspaceProjects : [];
-  const activeTasks = Array.isArray(state.activeProjectTasks) ? state.activeProjectTasks : [];
-  const recentFailures = Array.isArray(state.recentProjectFailures) ? state.recentProjectFailures : [];
-  const recentImports = Array.isArray(state.recentImports) ? state.recentImports : [];
-  const rolePlaybooks = Array.isArray(state.rolePlaybooks) ? state.rolePlaybooks : [];
-  const policies = state.policies || {};
-  const completedProjectJobs = projectPanels.flatMap((project) => {
-    const recentJobs = Array.isArray(project?.recentJobs) ? project.recentJobs : [];
-    const readyExports = Array.isArray(project?.history?.readyExports) ? project.history.readyExports : [];
-    const latestReady = readyExports[0] || null;
-    const settledJobs = recentJobs.filter((entry) => !["queued", "in_progress", "waiting_for_user"].includes(String(entry?.finalStatus || "").trim()));
-    if (settledJobs.length) {
-      return settledJobs.map((job) => ({
-        projectName: String(project?.name || project?.sourceName || "(unnamed project)").trim() || "(unnamed project)",
-        sourceName: String(project?.sourceName || "").trim(),
-        stage: String(project?.currentStage || "").trim(),
-        outputPath: String(latestReady?.path || "").trim(),
-        outputAt: Number(latestReady?.occurredAt || 0),
-        job
-      }));
+  const insertionButton = tabBarEl.querySelector("[data-tab-target='queueTab']");
+  const insertionPanel = drawerContentEl.querySelector("#queueTab");
+  for (const tab of tabs) {
+    const panelId = `pluginTab_${tab.pluginId}_${tab.id}`.replace(/[^a-z0-9_-]+/gi, "_");
+    const button = document.createElement("button");
+    button.className = "tab-button";
+    button.type = "button";
+    button.dataset.tabTarget = panelId;
+    button.dataset.pluginTopLevelTab = "true";
+    button.setAttribute("aria-label", tab.title);
+    button.setAttribute("title", tab.title);
+    button.innerHTML = `<span class="tab-icon">${escapeHtml(tab.icon || tab.title.slice(0, 1).toUpperCase())}</span>`;
+    button.onclick = () => activateTab(panelId);
+    if (insertionButton) {
+      tabBarEl.insertBefore(button, insertionButton);
+    } else {
+      tabBarEl.appendChild(button);
     }
-    if (latestReady?.path) {
-      return [{
-        projectName: String(project?.name || project?.sourceName || "(unnamed project)").trim() || "(unnamed project)",
-        sourceName: String(project?.sourceName || "").trim(),
-        stage: "completed",
-        outputPath: String(latestReady.path || "").trim(),
-        outputAt: Number(latestReady.occurredAt || 0),
-        job: null
-      }];
+
+    const panel = document.createElement("div");
+    panel.id = panelId;
+    panel.className = "tab-panel";
+    panel.dataset.pluginTopLevelTab = "true";
+    panel.dataset.pluginId = tab.pluginId;
+    panel.innerHTML = `<div class="tab-stack"><div id="${panelId}_mount" class="plugin-tab-mount"><div class="hint">Loading ${escapeHtml(tab.title)}...</div></div></div>`;
+    if (insertionPanel) {
+      drawerContentEl.insertBefore(panel, insertionPanel);
+    } else {
+      drawerContentEl.appendChild(panel);
     }
-    return [];
-  }).sort((left, right) => {
-    const leftTime = Number(left?.job?.updatedAt || left?.outputAt || 0);
-    const rightTime = Number(right?.job?.updatedAt || right?.outputAt || 0);
-    return rightTime - leftTime;
+
+    const mountEl = panel.querySelector(`#${panelId}_mount`);
+    try {
+      await mountPluginTopLevelTab(tab, mountEl);
+    } catch (error) {
+      if (mountEl) {
+        mountEl.innerHTML = `<div class="hint">Failed to load ${escapeHtml(tab.title)}: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+  }
+}
+
+async function renderPluginSecretsTabs() {
+  const secretsTabEl = document.getElementById("secretsTab");
+  if (!(secretsTabEl instanceof HTMLElement)) {
+    return;
+  }
+  const subtabBarEl = secretsTabEl.querySelector(".secrets-subtab-bar");
+  if (!(subtabBarEl instanceof HTMLElement)) {
+    return;
+  }
+  const existingButtons = Array.from(subtabBarEl.querySelectorAll("[data-plugin-secrets-tab='true']"));
+  const existingPanels = Array.from(secretsTabEl.querySelectorAll(".secrets-subtab-panel[data-plugin-secrets-tab='true']"));
+  existingButtons.forEach((button) => button.remove());
+  existingPanels.forEach((panel) => panel.remove());
+
+  const tabs = normalizePluginUiSecretsTabs();
+  if (!tabs.length) {
+    activateSecretsSubtab(activeSecretsSubtabId || "secretsOverviewPanel");
+    return;
+  }
+
+  const insertionButton = subtabBarEl.querySelector("[data-secrets-subtab-target='secretsRetrievalPanel']");
+  const insertionPanel = secretsTabEl.querySelector("#secretsRetrievalPanel");
+  const insertionPanelParent = insertionPanel?.parentElement || null;
+  for (const tab of tabs) {
+    const panelId = `pluginSecretsTab_${tab.pluginId}_${tab.id}`.replace(/[^a-z0-9_-]+/gi, "_");
+    const button = document.createElement("button");
+    button.className = "secrets-subtab-button";
+    button.type = "button";
+    button.dataset.secretsSubtabTarget = panelId;
+    button.dataset.pluginSecretsTab = "true";
+    button.textContent = tab.title;
+    button.onclick = () => activateSecretsSubtab(panelId);
+    if (insertionButton) {
+      subtabBarEl.insertBefore(button, insertionButton);
+    } else {
+      subtabBarEl.appendChild(button);
+    }
+
+    const panel = document.createElement("section");
+    panel.id = panelId;
+    panel.className = "secrets-subtab-panel";
+    panel.dataset.pluginSecretsTab = "true";
+    panel.dataset.pluginId = tab.pluginId;
+    panel.innerHTML = `<div id="${panelId}_mount" class="plugin-tab-mount"><div class="panel-subtle">Loading ${escapeHtml(tab.title)}...</div></div>`;
+    if (insertionPanel && insertionPanelParent) {
+      insertionPanelParent.insertBefore(panel, insertionPanel);
+    } else {
+      secretsTabEl.appendChild(panel);
+    }
+
+    const mountEl = panel.querySelector(`#${panelId}_mount`);
+    try {
+      await mountPluginSecretsTab(tab, mountEl);
+    } catch (error) {
+      if (mountEl) {
+        mountEl.innerHTML = `<div class="panel-subtle">Failed to load ${escapeHtml(tab.title)}: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+  }
+  activateSecretsSubtab(activeSecretsSubtabId || "secretsOverviewPanel");
+}
+
+async function renderPluginNovaTabs() {
+  const novaTabEl = document.getElementById("novaTab");
+  if (!(novaTabEl instanceof HTMLElement)) {
+    return;
+  }
+  const subtabBarEl = novaTabEl.querySelector(".nova-subtab-bar");
+  if (!(subtabBarEl instanceof HTMLElement)) {
+    return;
+  }
+  const existingButtons = Array.from(subtabBarEl.querySelectorAll("[data-plugin-nova-tab='true']"));
+  const existingPanels = Array.from(novaTabEl.querySelectorAll(".nova-subtab-panel[data-plugin-nova-tab='true']"));
+  existingButtons.forEach((button) => button.remove());
+  existingPanels.forEach((panel) => panel.remove());
+
+  const tabs = normalizePluginUiNovaTabs();
+  if (!tabs.length) {
+    activateNovaSubtab(activeNovaSubtabId || "novaIdentityPanel");
+    return;
+  }
+
+  for (const tab of tabs) {
+    const panelId = `pluginNovaTab_${tab.pluginId}_${tab.id}`.replace(/[^a-z0-9_-]+/gi, "_");
+    const button = document.createElement("button");
+    button.className = "nova-subtab-button";
+    button.type = "button";
+    button.dataset.novaSubtabTarget = panelId;
+    button.dataset.pluginNovaTab = "true";
+    button.textContent = tab.title;
+    button.onclick = () => activateNovaSubtab(panelId);
+    subtabBarEl.appendChild(button);
+
+    const panel = document.createElement("section");
+    panel.id = panelId;
+    panel.className = "nova-subtab-panel";
+    panel.dataset.pluginNovaTab = "true";
+    panel.dataset.pluginId = tab.pluginId;
+    panel.innerHTML = `<div id="${panelId}_mount" class="plugin-tab-mount"><div class="panel-subtle">Loading ${escapeHtml(tab.title)}...</div></div>`;
+    novaTabEl.appendChild(panel);
+
+    const mountEl = panel.querySelector(`#${panelId}_mount`);
+    try {
+      await mountPluginNovaTab(tab, mountEl);
+    } catch (error) {
+      if (mountEl) {
+        mountEl.innerHTML = `<div class="panel-subtle">Failed to load ${escapeHtml(tab.title)}: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+  }
+  activateNovaSubtab(activeNovaSubtabId || "novaIdentityPanel");
+}
+
+function toPluginUiCamelCase(value = "") {
+  const normalized = normalizePluginUiToken(value);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.replace(/[-_.]+([a-z0-9])/g, (_match, next) => String(next || "").toUpperCase());
+}
+
+function normalizePluginUiPanels() {
+  const panels = Array.isArray(pluginCatalogDraft?.uiPanels)
+    ? pluginCatalogDraft.uiPanels
+    : [];
+  const normalizedPanels = [];
+  for (const panel of panels) {
+    if (!panel || typeof panel !== "object") {
+      continue;
+    }
+    const panelId = normalizePluginUiToken(panel.id || panel.panelId || panel.name || panel.title);
+    const pluginId = normalizePluginUiToken(panel.pluginId || panel.plugin || "");
+    if (!panelId || !pluginId) {
+      continue;
+    }
+    const normalizedFields = Array.isArray(panel.fields)
+      ? panel.fields.map((field) => {
+        if (!field || typeof field !== "object") {
+          return null;
+        }
+        const fieldId = normalizePluginUiToken(field.id || field.name || field.label);
+        if (!fieldId) {
+          return null;
+        }
+        const type = normalizePluginUiToken(field.type || "text");
+        return {
+          id: fieldId,
+          label: String(field.label || fieldId).trim() || fieldId,
+          type: ["text", "number", "checkbox", "textarea"].includes(type) ? type : "text",
+          placeholder: String(field.placeholder || "").trim(),
+          required: field.required === true,
+          format: normalizePluginUiToken(field.format || ""),
+          defaultValue: field.defaultValue
+        };
+      }).filter(Boolean)
+      : [];
+    const normalizedActions = Array.isArray(panel.actions)
+      ? panel.actions.map((action) => {
+        if (!action || typeof action !== "object") {
+          return null;
+        }
+        const actionId = normalizePluginUiToken(action.id || action.name || action.label);
+        const endpoint = String(action.endpoint || "").trim();
+        if (!actionId || !endpoint) {
+          return null;
+        }
+        const method = String(action.method || "GET").trim().toUpperCase() || "GET";
+        return {
+          id: actionId,
+          label: String(action.label || actionId).trim() || actionId,
+          method,
+          endpoint,
+          queryFields: Array.isArray(action.queryFields)
+            ? action.queryFields.map((entry) => normalizePluginUiToken(entry)).filter(Boolean)
+            : [],
+          bodyFields: Array.isArray(action.bodyFields)
+            ? action.bodyFields.map((entry) => normalizePluginUiToken(entry)).filter(Boolean)
+            : [],
+          staticBody: action.staticBody && typeof action.staticBody === "object"
+            ? cloneJson(action.staticBody)
+            : {},
+          expects: normalizePluginUiToken(action.expects || "json") || "json",
+          confirm: String(action.confirm || "").trim()
+        };
+      }).filter(Boolean)
+      : [];
+    normalizedPanels.push({
+      id: panelId,
+      pluginId,
+      pluginName: String(panel.pluginName || panel.pluginId || pluginId).trim() || pluginId,
+      title: String(panel.title || panel.name || panelId).trim() || panelId,
+      description: String(panel.description || "").trim(),
+      fields: normalizedFields,
+      actions: normalizedActions
+    });
+  }
+  return normalizedPanels.sort((left, right) => {
+    const pluginCompare = String(left.pluginName || left.pluginId || "")
+      .localeCompare(String(right.pluginName || right.pluginId || ""));
+    if (pluginCompare !== 0) {
+      return pluginCompare;
+    }
+    return String(left.title || left.id || "").localeCompare(String(right.title || right.id || ""));
   });
-  const activeOverviewProjects = projectPanels.filter((project) =>
-    String(project?.currentStage || "").trim().toLowerCase() !== "completed"
+}
+
+function pluginUiPanelKey(panel = {}) {
+  const pluginId = normalizePluginUiToken(panel.pluginId || "");
+  const panelId = normalizePluginUiToken(panel.id || "");
+  if (!pluginId || !panelId) {
+    return "";
+  }
+  return `${pluginId}:${panelId}`;
+}
+
+function ensurePluginDynamicPanelDraft(panel = {}) {
+  const key = pluginUiPanelKey(panel);
+  if (!key) {
+    return {};
+  }
+  const existing = pluginDynamicPanelDraftByKey.get(key);
+  if (existing && typeof existing === "object") {
+    return existing;
+  }
+  const nextDraft = {};
+  for (const field of Array.isArray(panel.fields) ? panel.fields : []) {
+    if (!field?.id) {
+      continue;
+    }
+    if (field.type === "checkbox") {
+      nextDraft[field.id] = field.defaultValue === true;
+      continue;
+    }
+    if (field.type === "number") {
+      if (field.defaultValue == null || field.defaultValue === "") {
+        nextDraft[field.id] = "";
+      } else {
+        const parsed = Number(field.defaultValue);
+        nextDraft[field.id] = Number.isFinite(parsed) ? parsed : "";
+      }
+      continue;
+    }
+    if (field.defaultValue == null) {
+      nextDraft[field.id] = "";
+      continue;
+    }
+    if (field.format === "json" && typeof field.defaultValue === "object") {
+      nextDraft[field.id] = cloneJson(field.defaultValue);
+      continue;
+    }
+    nextDraft[field.id] = String(field.defaultValue);
+  }
+  pluginDynamicPanelDraftByKey.set(key, nextDraft);
+  return nextDraft;
+}
+
+function prunePluginDynamicPanelDraft(allowedKeys = []) {
+  const allowed = new Set(
+    (Array.isArray(allowedKeys) ? allowedKeys : [])
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
   );
-  const fallbackOverviewProjects = activeOverviewProjects.length
-    ? activeOverviewProjects
-    : (projectPanels[0] ? [projectPanels[0]] : []);
-  const projectOptionList = fallbackOverviewProjects.map((project, index) => ({
-    key: getProjectOverviewKey(project, index),
-    label: getProjectOverviewLabel(project)
-  }));
-  const selectedProjectKey = projectOptionList.some((entry) => entry.key === activeProjectOverviewKey)
-    ? activeProjectOverviewKey
-    : (projectOptionList[0]?.key || "");
-  const selectedProjectIndex = projectOptionList.findIndex((entry) => entry.key === selectedProjectKey);
-  const selectedProject = selectedProjectIndex >= 0 ? fallbackOverviewProjects[selectedProjectIndex] : null;
+  for (const key of pluginDynamicPanelDraftByKey.keys()) {
+    if (!allowed.has(key)) {
+      pluginDynamicPanelDraftByKey.delete(key);
+    }
+  }
+}
 
-  activeProjectOverviewKey = selectedProjectKey;
-  projectsOverviewSelectEl.disabled = !projectOptionList.length;
-  projectsOverviewSelectEl.innerHTML = projectOptionList.length
-    ? projectOptionList.map((entry) => `<option value="${escapeAttr(entry.key)}"${entry.key === selectedProjectKey ? " selected" : ""}>${escapeHtml(entry.label)}</option>`).join("")
-    : `<option value="">No active projects</option>`;
-  projectsOverviewSelectEl.onchange = () => {
-    activeProjectOverviewKey = String(projectsOverviewSelectEl.value || "").trim();
-    renderProjectConfigEditor();
-  };
+function pluginFieldDisplayValue(panelKey = "", field = {}) {
+  const draft = pluginDynamicPanelDraftByKey.get(panelKey) || {};
+  const hasValue = Object.prototype.hasOwnProperty.call(draft, field.id);
+  const rawValue = hasValue ? draft[field.id] : field.defaultValue;
+  if (field.type === "checkbox") {
+    return rawValue === true;
+  }
+  if (field.type === "number") {
+    if (rawValue == null || rawValue === "") {
+      return "";
+    }
+    const parsed = Number(rawValue);
+    return Number.isFinite(parsed) ? String(parsed) : "";
+  }
+  if (rawValue == null) {
+    return "";
+  }
+  if (field.format === "json") {
+    if (typeof rawValue === "string") {
+      return rawValue;
+    }
+    try {
+      return JSON.stringify(rawValue, null, 2);
+    } catch {
+      return "";
+    }
+  }
+  return String(rawValue);
+}
 
-  projectsOverviewListEl.innerHTML = selectedProject
-    ? renderProjectOverviewCard(selectedProject)
-    : `<div class="panel-subtle">No active project overviews are available right now.</div>`;
-  projectsCompletedListEl.innerHTML = completedProjectJobs.length
-    ? completedProjectJobs.slice(0, 24).map((entry) => renderCompletedProjectJobCard(entry)).join("")
-    : `<div class="panel-subtle">No completed or exported project jobs are recorded yet.</div>`;
-
-  projectsSettingsListEl.innerHTML = `
-    <div class="projects-settings-stack">
-      <label class="project-setting-row stack-field">
-        <strong>Max active work packages per project</strong>
-        <span class="micro">Concurrent focused project-cycle packages allowed for one project.</span>
-        <input type="number" min="1" max="12" step="1" data-project-field="maxActiveWorkPackagesPerProject" value="${escapeHtml(String(projects.maxActiveWorkPackagesPerProject || 6))}" />
+function renderPluginDynamicPanelField(panelKey = "", field = {}) {
+  const fieldId = String(field.id || "").trim();
+  if (!fieldId) {
+    return "";
+  }
+  if (field.type === "checkbox") {
+    const checked = pluginFieldDisplayValue(panelKey, field) === true;
+    return `
+      <label class="micro plugin-ui-checkbox">
+        <input
+          type="checkbox"
+          data-plugin-ui-panel-key="${escapeAttr(panelKey)}"
+          data-plugin-ui-field-id="${escapeAttr(fieldId)}"
+          ${checked ? "checked" : ""}
+        />
+        ${escapeHtml(field.label || fieldId)}${field.required ? " *" : ""}
       </label>
-      <label class="project-setting-row stack-field">
-        <strong>Project retry cooldown (hours)</strong>
-        <span class="micro">Minimum delay before the same project work item is eligible again.</span>
-        <input type="number" min="0" max="168" step="0.5" data-project-field="projectWorkRetryCooldownMs" data-project-unit="hours" value="${escapeHtml(projectDurationToDisplay(projects.projectWorkRetryCooldownMs, "hours"))}" />
+    `;
+  }
+  const placeholder = String(field.placeholder || "").trim();
+  const currentValue = pluginFieldDisplayValue(panelKey, field);
+  const minAttr = field.min == null || Number.isNaN(Number(field.min)) ? "" : ` min="${escapeAttr(String(Number(field.min)))}"`;
+  const maxAttr = field.max == null || Number.isNaN(Number(field.max)) ? "" : ` max="${escapeAttr(String(Number(field.max)))}"`;
+  const stepAttr = field.step == null || Number.isNaN(Number(field.step)) ? "" : ` step="${escapeAttr(String(Number(field.step)))}"`;
+  const requiredMarker = field.required ? " *" : "";
+  if (field.type === "textarea") {
+    return `
+      <label class="stack-field plugin-ui-field">
+        <strong>${escapeHtml(field.label || fieldId)}${requiredMarker}</strong>
+        <textarea
+          rows="4"
+          data-plugin-ui-panel-key="${escapeAttr(panelKey)}"
+          data-plugin-ui-field-id="${escapeAttr(fieldId)}"
+          placeholder="${escapeAttr(placeholder)}"
+        >${escapeHtml(String(currentValue || ""))}</textarea>
       </label>
-      <label class="project-setting-row stack-field">
-        <strong>Idle scan wait after activity (seconds)</strong>
-        <span class="micro">How long the system waits after activity before opportunity scanning can run.</span>
-        <input type="number" min="5" max="3600" step="1" data-project-field="opportunityScanIdleMs" data-project-unit="seconds" value="${escapeHtml(projectDurationToDisplay(projects.opportunityScanIdleMs, "seconds"))}" />
-      </label>
-      <label class="project-setting-row stack-field">
-        <strong>Opportunity scan interval (seconds)</strong>
-        <span class="micro">How often the idle scan wakes up to inspect project opportunities.</span>
-        <input type="number" min="10" max="3600" step="1" data-project-field="opportunityScanIntervalMs" data-project-unit="seconds" value="${escapeHtml(projectDurationToDisplay(projects.opportunityScanIntervalMs, "seconds"))}" />
-      </label>
-      <label class="project-setting-row stack-field">
-        <strong>Opportunity retention window (days)</strong>
-        <span class="micro">How long scan-memory entries are kept before pruning.</span>
-        <input type="number" min="0.1" max="365" step="0.5" data-project-field="opportunityScanRetentionMs" data-project-unit="days" value="${escapeHtml(projectDurationToDisplay(projects.opportunityScanRetentionMs, "days"))}" />
-      </label>
-      <label class="project-setting-row stack-field">
-        <strong>Queued backlog cap before scan skips</strong>
-        <span class="micro">If the queue reaches this depth, opportunity scan will not add more project work.</span>
-        <input type="number" min="1" max="50" step="1" data-project-field="opportunityScanMaxQueuedBacklog" value="${escapeHtml(String(projects.opportunityScanMaxQueuedBacklog || 5))}" />
-      </label>
-      <label class="project-setting-row stack-field">
-        <strong>Minimum concrete targets for no-change</strong>
-        <span class="micro">Project-cycle workers must inspect at least this many concrete targets before claiming no safe change.</span>
-        <input type="number" min="1" max="6" step="1" data-project-field="noChangeMinimumConcreteTargets" value="${escapeHtml(String(projects.noChangeMinimumConcreteTargets || 3))}" />
-      </label>
-    </div>
-    <div class="project-toggle-list">
-      <label class="toggle project-toggle-row">
-        <input type="checkbox" data-project-field="autoCreateProjectTodo" ${projects.autoCreateProjectTodo !== false ? "checked" : ""} />
-        <span>
-          <strong>Auto-create PROJECT-TODO.md</strong>
-          <div class="micro">Seed missing project todo files from native inspection.</div>
-        </span>
-      </label>
-      <label class="toggle project-toggle-row">
-        <input type="checkbox" data-project-field="autoCreateProjectRoleTasks" ${projects.autoCreateProjectRoleTasks !== false ? "checked" : ""} />
-        <span>
-          <strong>Auto-create PROJECT-ROLE-TASKS.md</strong>
-          <div class="micro">Seed missing role task boards from project inspection.</div>
-        </span>
-      </label>
-      <label class="toggle project-toggle-row">
-        <input type="checkbox" data-project-field="autoImportProjects" ${projects.autoImportProjects !== false ? "checked" : ""} />
-        <span>
-          <strong>Auto-import repository projects</strong>
-          <div class="micro">Pull fresh projects into the workspace during idle rotation.</div>
-        </span>
-      </label>
-      <label class="toggle project-toggle-row">
-        <input type="checkbox" data-project-field="autoExportReadyProjects" ${projects.autoExportReadyProjects !== false ? "checked" : ""} />
-        <span>
-          <strong>Auto-export ready projects</strong>
-          <div class="micro">Move completed workspace projects into observer output automatically.</div>
-        </span>
-      </label>
-    </div>
+    `;
+  }
+  const inputType = field.type === "number" ? "number" : "text";
+  return `
+    <label class="stack-field plugin-ui-field">
+      <strong>${escapeHtml(field.label || fieldId)}${requiredMarker}</strong>
+      <input
+        type="${escapeAttr(inputType)}"
+        data-plugin-ui-panel-key="${escapeAttr(panelKey)}"
+        data-plugin-ui-field-id="${escapeAttr(fieldId)}"
+        value="${escapeAttr(String(currentValue || ""))}"
+        placeholder="${escapeAttr(placeholder)}"${minAttr}${maxAttr}${stepAttr}
+      />
+    </label>
   `;
+}
 
-  projectsSettingsListEl.querySelectorAll("[data-project-field]").forEach((input) => {
-    input.onchange = () => {
-      const field = String(input.dataset.projectField || "").trim();
-      if (!field || !projectConfigDraft?.projects) {
+function normalizePluginDynamicInputValue(field = {}, element = null) {
+  if (!element) {
+    return "";
+  }
+  if (field.type === "checkbox") {
+    return element.checked === true;
+  }
+  if (field.type === "number") {
+    const rawValue = String(element.value || "").trim();
+    if (!rawValue) {
+      return "";
+    }
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`${field.label || field.id || "Field"} must be a valid number.`);
+    }
+    return parsed;
+  }
+  const rawText = String(element.value || "");
+  if (field.format === "json") {
+    const trimmed = rawText.trim();
+    if (!trimmed) {
+      return "";
+    }
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      throw new Error(`${field.label || field.id || "Field"} must contain valid JSON.`);
+    }
+  }
+  return rawText.trim();
+}
+
+function shouldIncludePluginDynamicValue(value) {
+  if (value == null) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value === "boolean") {
+    return true;
+  }
+  return true;
+}
+
+function pluginDynamicValueToQueryValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function pluginDynamicPayloadKeys(fieldId = "") {
+  const normalizedFieldId = normalizePluginUiToken(fieldId);
+  if (!normalizedFieldId) {
+    return [];
+  }
+  const keys = new Set([normalizedFieldId]);
+  const camelCaseKey = toPluginUiCamelCase(normalizedFieldId);
+  if (camelCaseKey) {
+    keys.add(camelCaseKey);
+  }
+  if (normalizedFieldId.endsWith("_json")) {
+    const base = normalizedFieldId.slice(0, -5);
+    if (base) {
+      keys.add(base);
+      const camelBase = toPluginUiCamelCase(base);
+      if (camelBase) {
+        keys.add(camelBase);
+      }
+    }
+  }
+  if (camelCaseKey && camelCaseKey.endsWith("Json")) {
+    const camelBase = camelCaseKey.slice(0, -4);
+    if (camelBase) {
+      keys.add(camelBase);
+    }
+  }
+  return [...keys].filter(Boolean);
+}
+
+function updatePluginDynamicPanelDraft(panelKey = "", fieldId = "", value = "") {
+  const normalizedPanelKey = String(panelKey || "").trim();
+  const normalizedFieldId = normalizePluginUiToken(fieldId);
+  if (!normalizedPanelKey || !normalizedFieldId) {
+    return;
+  }
+  const existing = pluginDynamicPanelDraftByKey.get(normalizedPanelKey) || {};
+  pluginDynamicPanelDraftByKey.set(normalizedPanelKey, {
+    ...existing,
+    [normalizedFieldId]: value
+  });
+}
+
+function pluginDynamicPanelElements(panelKey = "") {
+  if (!pluginDynamicPanelsListEl) {
+    return {
+      panelRoot: null,
+      statusEl: null,
+      resultEl: null
+    };
+  }
+  const panelRoot = pluginDynamicPanelsListEl.querySelector(`[data-plugin-ui-panel-key="${panelKey}"]`);
+  if (!panelRoot) {
+    return {
+      panelRoot: null,
+      statusEl: null,
+      resultEl: null
+    };
+  }
+  return {
+    panelRoot,
+    statusEl: panelRoot.querySelector("[data-plugin-ui-status]"),
+    resultEl: panelRoot.querySelector("[data-plugin-ui-result]")
+  };
+}
+
+function setPluginDynamicPanelStatus(panelKey = "", message = "") {
+  const { statusEl } = pluginDynamicPanelElements(panelKey);
+  if (statusEl) {
+    statusEl.textContent = String(message || "").trim() || "Ready.";
+  }
+}
+
+function setPluginDynamicPanelResult(panelKey = "", payload = null) {
+  const { resultEl } = pluginDynamicPanelElements(panelKey);
+  if (!resultEl) {
+    return;
+  }
+  if (typeof payload === "string") {
+    resultEl.textContent = payload;
+    return;
+  }
+  resultEl.textContent = JSON.stringify(payload == null ? {} : payload, null, 2);
+}
+
+function renderPluginDynamicPanels() {
+  if (!pluginDynamicPanelsListEl) {
+    return;
+  }
+  const panels = normalizePluginUiPanels();
+  const panelKeys = [];
+  pluginDynamicPanelIndex = new Map();
+  for (const panel of panels) {
+    const panelKey = pluginUiPanelKey(panel);
+    if (!panelKey) {
+      continue;
+    }
+    panelKeys.push(panelKey);
+    pluginDynamicPanelIndex.set(panelKey, panel);
+    ensurePluginDynamicPanelDraft(panel);
+  }
+  prunePluginDynamicPanelDraft(panelKeys);
+  if (!panels.length) {
+    pluginDynamicPanelsListEl.innerHTML = `<div class="panel-subtle">No plugin UI panels are currently registered.</div>`;
+    return;
+  }
+  pluginDynamicPanelsListEl.innerHTML = panels.map((panel) => {
+    const panelKey = pluginUiPanelKey(panel);
+    const actions = Array.isArray(panel.actions) ? panel.actions : [];
+    const fields = Array.isArray(panel.fields) ? panel.fields : [];
+    const actionSummary = actions.length
+      ? actions.map((action) =>
+        `${String(action.method || "GET").toUpperCase()} ${String(action.endpoint || "").trim()}`
+      ).join(" | ")
+      : "No actions registered";
+    return `
+      <div class="brain-row plugin-ui-panel" data-plugin-ui-panel-key="${escapeAttr(panelKey)}">
+        <div class="brain-row-actions">
+          <span>
+            <strong>${escapeHtml(String(panel.title || panel.id || "Plugin Panel"))}</strong>
+            <div class="micro">${escapeHtml(String(panel.pluginName || panel.pluginId || "Plugin"))} (${escapeHtml(String(panel.pluginId || ""))})</div>
+          </span>
+          <span class="brain-pill">${escapeHtml(`${actions.length} action${actions.length === 1 ? "" : "s"}`)}</span>
+        </div>
+        <div class="micro">${escapeHtml(String(panel.description || "No description provided."))}</div>
+        <div class="plugin-ui-fields">
+          ${fields.length
+            ? fields.map((field) => renderPluginDynamicPanelField(panelKey, field)).join("")
+            : `<div class="panel-subtle">No configurable fields.</div>`}
+        </div>
+        <div class="plugin-ui-actions">
+          ${actions.length
+            ? actions.map((action) => `
+              <button
+                class="secondary"
+                type="button"
+                data-plugin-ui-panel-key="${escapeAttr(panelKey)}"
+                data-plugin-ui-action-id="${escapeAttr(String(action.id || ""))}"
+              >${escapeHtml(String(action.label || action.id || "Run"))}</button>
+            `).join("")
+            : `<div class="panel-subtle">No actions registered.</div>`}
+        </div>
+        <div class="micro">${escapeHtml(actionSummary)}</div>
+        <div class="micro" data-plugin-ui-status>Ready.</div>
+        <pre class="json-box plugin-ui-result" data-plugin-ui-result>No action run yet.</pre>
+      </div>
+    `;
+  }).join("");
+}
+
+async function runPluginDynamicPanelAction(button = null) {
+  if (!button || !pluginDynamicPanelsListEl) {
+    return;
+  }
+  const panelKey = String(button.dataset.pluginUiPanelKey || "").trim();
+  const actionId = normalizePluginUiToken(button.dataset.pluginUiActionId || "");
+  if (!panelKey || !actionId) {
+    return;
+  }
+  const panel = pluginDynamicPanelIndex.get(panelKey);
+  if (!panel) {
+    return;
+  }
+  const action = (Array.isArray(panel.actions) ? panel.actions : [])
+    .find((entry) => normalizePluginUiToken(entry.id) === actionId);
+  if (!action) {
+    return;
+  }
+  const { panelRoot } = pluginDynamicPanelElements(panelKey);
+  if (!panelRoot) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    const fieldValues = {};
+    for (const field of Array.isArray(panel.fields) ? panel.fields : []) {
+      const input = panelRoot.querySelector(`[data-plugin-ui-field-id="${field.id}"]`);
+      if (!input) {
+        continue;
+      }
+      const value = normalizePluginDynamicInputValue(field, input);
+      fieldValues[field.id] = value;
+      updatePluginDynamicPanelDraft(panelKey, field.id, value);
+    }
+    const referencedFieldIds = new Set([
+      ...(Array.isArray(action.queryFields) ? action.queryFields : []),
+      ...(Array.isArray(action.bodyFields) ? action.bodyFields : [])
+    ]);
+    for (const field of Array.isArray(panel.fields) ? panel.fields : []) {
+      if (!field.required || !referencedFieldIds.has(field.id)) {
+        continue;
+      }
+      if (!shouldIncludePluginDynamicValue(fieldValues[field.id])) {
+        throw new Error(`${field.label || field.id || "Required field"} is required.`);
+      }
+    }
+    if (action.confirm && typeof window !== "undefined" && typeof window.confirm === "function") {
+      const confirmed = window.confirm(action.confirm);
+      if (!confirmed) {
+        setPluginDynamicPanelStatus(panelKey, "Action cancelled.");
         return;
       }
-      if (input.type === "checkbox") {
-        projectConfigDraft.projects[field] = input.checked;
+    }
+    const method = String(action.method || "GET").trim().toUpperCase() || "GET";
+    const query = new URLSearchParams();
+    for (const fieldId of Array.isArray(action.queryFields) ? action.queryFields : []) {
+      const value = fieldValues[fieldId];
+      if (!shouldIncludePluginDynamicValue(value)) {
+        continue;
+      }
+      for (const key of pluginDynamicPayloadKeys(fieldId)) {
+        query.set(key, pluginDynamicValueToQueryValue(value));
+      }
+    }
+    const queryString = query.toString();
+    const endpoint = String(action.endpoint || "").trim();
+    const requestPath = queryString
+      ? `${endpoint}${endpoint.includes("?") ? "&" : "?"}${queryString}`
+      : endpoint;
+    let requestBody = null;
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      const body = cloneJson(action.staticBody || {});
+      for (const fieldId of Array.isArray(action.bodyFields) ? action.bodyFields : []) {
+        const value = fieldValues[fieldId];
+        if (!shouldIncludePluginDynamicValue(value)) {
+          continue;
+        }
+        for (const key of pluginDynamicPayloadKeys(fieldId)) {
+          body[key] = value;
+        }
+      }
+      requestBody = JSON.stringify(body);
+    }
+    setPluginDynamicPanelStatus(panelKey, `Running ${action.label || action.id || "action"}...`);
+    const runFetch = /^\/api\/plugins(?:\/|$)/i.test(requestPath)
+      ? pluginAdminFetch
+      : fetch;
+    const response = await runFetch(requestPath, {
+      method,
+      headers: requestBody == null ? {} : { "content-type": "application/json" },
+      body: requestBody
+    });
+    const rawBody = await response.text();
+    const expectsText = action.expects === "text";
+    let payload = rawBody;
+    if (!expectsText) {
+      if (!rawBody) {
+        payload = {};
+      } else {
+        try {
+          payload = JSON.parse(rawBody);
+        } catch {
+          payload = {
+            ok: response.ok,
+            raw: rawBody
+          };
+        }
+      }
+    }
+    const payloadError = !expectsText && payload && typeof payload === "object"
+      ? String(payload.error || payload.message || "").trim()
+      : "";
+    if (!response.ok || payloadError) {
+      throw new Error(payloadError || rawBody || `request failed (${response.status})`);
+    }
+    setPluginDynamicPanelStatus(panelKey, `Completed ${action.label || action.id || "action"}.`);
+    setPluginDynamicPanelResult(panelKey, payload);
+    if (/^\/api\/plugins\/[^/]+\/toggle(?:\?|$)/i.test(requestPath)) {
+      await loadPluginManagerPanel({ silent: true });
+    }
+  } catch (error) {
+    setPluginDynamicPanelStatus(panelKey, `Action failed: ${error.message}`);
+    setPluginDynamicPanelResult(panelKey, String(error?.message || error || "unknown error"));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function bindPluginDynamicPanelEvents() {
+  if (!pluginDynamicPanelsListEl || pluginDynamicPanelEventsBound) {
+    return;
+  }
+  pluginDynamicPanelsListEl.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const panelKey = String(target.getAttribute("data-plugin-ui-panel-key") || "").trim();
+    const fieldId = normalizePluginUiToken(target.getAttribute("data-plugin-ui-field-id") || "");
+    if (!panelKey || !fieldId) {
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.type === "checkbox") {
+      updatePluginDynamicPanelDraft(panelKey, fieldId, target.checked === true);
+      return;
+    }
+    if ("value" in target) {
+      updatePluginDynamicPanelDraft(panelKey, fieldId, String(target.value || ""));
+    }
+  });
+
+  pluginDynamicPanelsListEl.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const actionButton = target.closest("[data-plugin-ui-action-id]");
+    if (!(actionButton instanceof HTMLButtonElement)) {
+      return;
+    }
+    runPluginDynamicPanelAction(actionButton).catch((error) => {
+      console.warn("plugin dynamic panel action failed", error);
+    });
+  });
+  pluginDynamicPanelEventsBound = true;
+}
+
+function setPluginControlsAvailability() {
+  const hasPermissionRules = isPluginInstalled("security");
+  if (refreshPluginPermissionsBtn) {
+    refreshPluginPermissionsBtn.disabled = !hasPermissionRules;
+  }
+  if (savePluginPermissionsBtn) {
+    savePluginPermissionsBtn.disabled = !hasPermissionRules;
+  }
+  if (pluginPermissionRulesEditorEl) {
+    pluginPermissionRulesEditorEl.disabled = !hasPermissionRules;
+    if (!hasPermissionRules) {
+      pluginPermissionRulesEditorEl.value = "";
+    }
+  }
+  if (pluginPermissionRulesStatusEl && !hasPermissionRules) {
+    pluginPermissionRulesStatusEl.textContent = "Permission Rules plugin is not installed.";
+  }
+
+  const hasSessionMemory = isPluginInstalled("session-memory");
+  if (refreshPluginSessionMemoryBtn) {
+    refreshPluginSessionMemoryBtn.disabled = !hasSessionMemory;
+  }
+  if (capturePluginSessionMemoryBtn) {
+    capturePluginSessionMemoryBtn.disabled = !hasSessionMemory;
+  }
+  if (pluginSessionTaskIdEl) {
+    pluginSessionTaskIdEl.disabled = !hasSessionMemory;
+    if (!hasSessionMemory) {
+      pluginSessionTaskIdEl.value = "";
+    }
+  }
+  if (!hasSessionMemory) {
+    if (pluginSessionMemoryStatusEl) {
+      pluginSessionMemoryStatusEl.textContent = "Session Memory plugin is not installed.";
+    }
+    if (pluginSessionMemoryResultEl) {
+      pluginSessionMemoryResultEl.textContent = "Session Memory plugin is not installed.";
+    }
+  }
+
+  const hasTaskLifecycle = isPluginInstalled("task-lifecycle");
+  if (refreshPluginTaskLifecycleBtn) {
+    refreshPluginTaskLifecycleBtn.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleTaskIdEl) {
+    pluginTaskLifecycleTaskIdEl.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleTimeoutMsEl) {
+    pluginTaskLifecycleTimeoutMsEl.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleCreateMessageEl) {
+    pluginTaskLifecycleCreateMessageEl.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleCreateBtn) {
+    pluginTaskLifecycleCreateBtn.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleOutputBtn) {
+    pluginTaskLifecycleOutputBtn.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleWaitBtn) {
+    pluginTaskLifecycleWaitBtn.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleStopBtn) {
+    pluginTaskLifecycleStopBtn.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleForceStopEl) {
+    pluginTaskLifecycleForceStopEl.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleAnswerEl) {
+    pluginTaskLifecycleAnswerEl.disabled = !hasTaskLifecycle;
+  }
+  if (pluginTaskLifecycleAnswerBtn) {
+    pluginTaskLifecycleAnswerBtn.disabled = !hasTaskLifecycle;
+  }
+  if (!hasTaskLifecycle) {
+    if (pluginTaskLifecycleStatusEl) {
+      pluginTaskLifecycleStatusEl.textContent = "Task Lifecycle plugin is not installed.";
+    }
+    if (pluginTaskLifecycleResultEl) {
+      pluginTaskLifecycleResultEl.textContent = "Task Lifecycle plugin is not installed.";
+    }
+  }
+
+  const hasCronHardening = isPluginInstalled("security");
+  if (refreshPluginCronBtn) {
+    refreshPluginCronBtn.disabled = !hasCronHardening;
+  }
+  if (!hasCronHardening && pluginCronStatusEl) {
+    pluginCronStatusEl.textContent = "Cron Hardening plugin is not installed.";
+  }
+}
+
+function renderPluginManagerPanel() {
+  if (!pluginInventoryListEl || !pluginCapabilityListEl || !pluginRouteListEl) {
+    return;
+  }
+  bindPluginDynamicPanelEvents();
+  const plugins = getInstalledPlugins();
+  if (!plugins.length) {
+    pluginInventoryListEl.innerHTML = `<div class="panel-subtle">No plugins are currently loaded.</div>`;
+    pluginCapabilityListEl.innerHTML = `<div class="panel-subtle">No plugin capabilities are currently registered.</div>`;
+    pluginRouteListEl.innerHTML = `<div class="panel-subtle">No plugin routes are currently registered.</div>`;
+    renderPluginDynamicPanels();
+    setPluginControlsAvailability();
+    return;
+  }
+
+  pluginInventoryListEl.innerHTML = plugins.map((plugin) => {
+    const enabled = plugin.enabled !== false;
+    const pluginId = String(plugin.id || "").trim();
+    const capabilityCount = Number(plugin.capabilityCount || (Array.isArray(plugin.capabilities) ? plugin.capabilities.length : 0) || 0);
+    const routeCount = Number(plugin.routeCount || (Array.isArray(plugin.routes) ? plugin.routes.length : 0) || 0);
+    const hookCount = Number(plugin.hookCount || (Array.isArray(plugin.hooks) ? plugin.hooks.length : 0) || 0);
+    return `
+      <div class="brain-row">
+        <div class="brain-row-actions">
+          <label class="toggle plugin-toggle-row">
+            <input type="checkbox" data-plugin-toggle-id="${escapeAttr(pluginId)}" ${enabled ? "checked" : ""} />
+            <span>
+              <strong>${escapeHtml(String(plugin.name || plugin.id || "Plugin"))}</strong>
+              <div class="micro">${escapeHtml(pluginId)} - v${escapeHtml(String(plugin.version || "0.0.0"))}</div>
+            </span>
+          </label>
+          <span class="brain-pill plugin-enabled-pill ${enabled ? "on" : "off"}">${enabled ? "enabled" : "disabled"}</span>
+        </div>
+        <div class="micro">${escapeHtml(String(plugin.description || "No description provided."))}</div>
+        <div class="micro">${escapeHtml(`${capabilityCount} cap${capabilityCount === 1 ? "" : "s"} - ${routeCount} route${routeCount === 1 ? "" : "s"} - ${hookCount} hook${hookCount === 1 ? "" : "s"}`)}</div>
+      </div>
+    `;
+  }).join("");
+  pluginInventoryListEl.querySelectorAll("[data-plugin-toggle-id]").forEach((inputEl) => {
+    if (!(inputEl instanceof HTMLInputElement)) {
+      return;
+    }
+    inputEl.onchange = async () => {
+      const pluginId = String(inputEl.dataset.pluginToggleId || "").trim();
+      if (!pluginId) {
         return;
       }
-      const unit = String(input.dataset.projectUnit || "").trim();
-      const numericValue = Number(input.value || 0);
-      projectConfigDraft.projects[field] = unit
-        ? projectDisplayToDuration(numericValue, unit)
-        : Math.round(numericValue);
+      const enabled = inputEl.checked === true;
+      inputEl.disabled = true;
+      pluginsHintEl.textContent = `${enabled ? "Enabling" : "Disabling"} ${pluginId}...`;
+      try {
+        const response = await pluginAdminFetch(`/api/plugins/${encodeURIComponent(pluginId)}/toggle`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ enabled })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || `failed to toggle ${pluginId}`);
+        }
+        await loadPluginManagerPanel({ silent: true });
+        pluginsHintEl.textContent = `${pluginId} ${enabled ? "enabled" : "disabled"}.`;
+      } catch (error) {
+        inputEl.checked = !enabled;
+        pluginsHintEl.textContent = `Toggle failed for ${pluginId}: ${error.message}`;
+      } finally {
+        inputEl.disabled = false;
+      }
     };
   });
 
-  projectsStateSummaryEl.innerHTML = `
-    <div class="summary-box">
-      <strong>Workspace projects</strong>
-      <div class="summary-pill">${escapeHtml(String(summary.workspaceProjectCount || 0))}</div>
-      <div class="micro">Projects currently present in the workspace container.</div>
-    </div>
-    <div class="summary-box">
-      <strong>Active project tasks</strong>
-      <div class="summary-pill">${escapeHtml(String(summary.activeProjectTaskCount || 0))}</div>
-      <div class="micro">Queued or running project-cycle tasks.</div>
-    </div>
-    <div class="summary-box">
-      <strong>Waiting project tasks</strong>
-      <div class="summary-pill">${escapeHtml(String(summary.waitingProjectTaskCount || 0))}</div>
-      <div class="micro">Project tasks currently blocked on a user answer.</div>
-    </div>
-    <div class="summary-box">
-      <strong>Recent project failures</strong>
-      <div class="summary-pill">${escapeHtml(String(summary.recentProjectFailureCount || 0))}</div>
-      <div class="micro">Recent project-cycle failures captured in history.</div>
-    </div>
-  `;
-
-  projectsWorkspaceListEl.innerHTML = workspaceProjects.length
-    ? workspaceProjects.map((project) => `
-      <div class="project-list-row">
-        <strong>${escapeHtml(project.name || "(unnamed)")}</strong>
-        <div class="micro">${escapeHtml(project.activeTaskCount ? `${project.activeTaskCount} active task${project.activeTaskCount === 1 ? "" : "s"}` : "Idle")}</div>
-      </div>
-    `).join("")
-    : `<div class="panel-subtle">No workspace projects are loaded right now.</div>`;
-
-  projectsActiveTasksListEl.innerHTML = activeTasks.length
-    ? activeTasks.map((task) => `
-      <div class="brain-row">
-        <div class="brain-row-actions">
-          <strong>${escapeHtml(task.codename || task.id || "Task")}</strong>
-          <span class="brain-pill">${escapeHtml(task.requestedBrainLabel || "worker")}</span>
-        </div>
-        <div class="micro">${escapeHtml(task.projectName || "(unknown project)")} · ${escapeHtml(String(task.status || "").replaceAll("_", " "))} · ${escapeHtml(formatDateTime(task.updatedAt))}</div>
-        <div class="micro">${escapeHtml(task.focus || "No focus recorded.")}</div>
-      </div>
-    `).join("")
-    : `<div class="panel-subtle">No active project-cycle tasks.</div>`;
-
-  projectsFailuresListEl.innerHTML = recentFailures.length
-    ? recentFailures.map((task) => `
-      <div class="brain-row">
-        <div class="brain-row-actions">
-          <strong>${escapeHtml(task.codename || task.id || "Task")}</strong>
-          <span class="brain-pill">${escapeHtml(task.failureClassification || "unknown")}</span>
-        </div>
-        <div class="micro">${escapeHtml(task.projectName || "(unknown project)")} · ${escapeHtml(formatDateTime(task.updatedAt))}</div>
-        <div class="micro">${escapeHtml(task.summary || "No summary recorded.")}</div>
-        ${task.toolLoopSummary && task.toolLoopSummary !== task.summary ? `<div class="micro">${escapeHtml(task.toolLoopSummary)}</div>` : ""}
-      </div>
-    `).join("")
-    : `<div class="panel-subtle">No recent project-cycle failures.</div>`;
-
-  const importLines = recentImports.length
-    ? recentImports.map((entry) => `<div class="micro">${escapeHtml(entry.sourceName || "(unknown)")} · ${escapeHtml(formatDateTime(entry.importedAt))}</div>`).join("")
-    : `<div class="panel-subtle">No recent project imports recorded.</div>`;
-  const playbookLines = rolePlaybooks.length
-    ? rolePlaybooks.slice(0, 8).map((entry) => `<div class="micro"><strong>${escapeHtml(entry.name)}</strong>: ${escapeHtml(entry.playbook)}</div>`).join("")
-    : `<div class="panel-subtle">No role playbooks registered.</div>`;
-  const policyLines = [
-    ...(Array.isArray(policies.targetScoring) ? policies.targetScoring.map((entry) => `<div class="micro">Target scoring: ${escapeHtml(entry)}</div>`) : []),
-    ...(Array.isArray(policies.loopRepair) ? policies.loopRepair.map((entry) => `<div class="micro">Loop repair: ${escapeHtml(entry)}</div>`) : [])
-  ].join("");
-  projectsPoliciesListEl.innerHTML = `
-    <div class="stack-list">
-      <div>
-        <strong>Recent imports</strong>
-        ${importLines}
-      </div>
-      <div>
-        <strong>Role playbooks (${escapeHtml(String(rolePlaybooks.length || 0))})</strong>
-        ${playbookLines}
-      </div>
-      <div>
-        <strong>Fixed policies</strong>
-        ${policyLines || `<div class="panel-subtle">No project policies exposed.</div>`}
-      </div>
-    </div>
-  `;
-
-  projectsActiveTasksListEl.innerHTML = activeTasks.length
-    ? activeTasks.map((task) => `
-      <div class="project-list-row">
-        <div class="project-item-title">
-          <strong>${escapeHtml(task.codename || task.id || "Task")}</strong>
-        </div>
-        <div><span class="brain-pill">${escapeHtml(task.requestedBrainLabel || "worker")}</span></div>
-        <div class="micro">${escapeHtml(task.projectName || "(unknown project)")} - ${escapeHtml(String(task.status || "").replaceAll("_", " "))} - ${escapeHtml(formatDateTime(task.updatedAt))}</div>
-        <div class="micro">${escapeHtml(task.focus || "No focus recorded.")}</div>
-      </div>
-    `).join("")
-    : `<div class="panel-subtle">No active project-cycle tasks.</div>`;
-
-  projectsFailuresListEl.innerHTML = recentFailures.length
-    ? recentFailures.map((task) => `
-      <div class="project-list-row">
-        <div class="project-item-title">
-          <strong>${escapeHtml(task.codename || task.id || "Task")}</strong>
-        </div>
-        <div><span class="brain-pill">${escapeHtml(task.failureClassification || "unknown")}</span></div>
-        <div class="micro">${escapeHtml(task.projectName || "(unknown project)")} - ${escapeHtml(formatDateTime(task.updatedAt))}</div>
-        <div class="micro">${escapeHtml(task.summary || "No summary recorded.")}</div>
-        ${task.toolLoopSummary && task.toolLoopSummary !== task.summary ? `<div class="micro">${escapeHtml(task.toolLoopSummary)}</div>` : ""}
-      </div>
-    `).join("")
-    : `<div class="panel-subtle">No recent project-cycle failures.</div>`;
-
-  projectsPoliciesListEl.innerHTML = `
-    <div class="projects-policy-stack">
-      <div class="project-policy-group">
-        <strong>Recent imports</strong>
-        ${recentImports.length
-          ? recentImports.map((entry) => `<div class="project-policy-line micro">${escapeHtml(entry.sourceName || "(unknown)")} - ${escapeHtml(formatDateTime(entry.importedAt))}</div>`).join("")
-          : `<div class="panel-subtle">No recent project imports recorded.</div>`}
-      </div>
-      <div class="project-policy-group">
-        <strong>Role playbooks (${escapeHtml(String(rolePlaybooks.length || 0))})</strong>
-        ${rolePlaybooks.length
-          ? rolePlaybooks.slice(0, 8).map((entry) => `<div class="project-policy-line micro"><strong>${escapeHtml(entry.name)}</strong><br>${escapeHtml(entry.playbook)}</div>`).join("")
-          : `<div class="panel-subtle">No role playbooks registered.</div>`}
-      </div>
-      <div class="project-policy-group">
-        <strong>Fixed policies</strong>
-        ${[
-          ...(Array.isArray(policies.targetScoring) ? policies.targetScoring.map((entry) => `<div class="project-policy-line micro"><strong>Target scoring</strong><br>${escapeHtml(entry)}</div>`) : []),
-          ...(Array.isArray(policies.loopRepair) ? policies.loopRepair.map((entry) => `<div class="project-policy-line micro"><strong>Loop repair</strong><br>${escapeHtml(entry)}</div>`) : [])
-        ].join("") || `<div class="panel-subtle">No project policies exposed.</div>`}
-      </div>
-    </div>
-  `;
-}
-
-function getProjectOverviewKey(project = {}, index = 0) {
-  const workspacePath = String(project?.workspace?.path || "").trim().toLowerCase();
-  const sourcePath = String(project?.source?.path || "").trim().toLowerCase();
-  const name = String(project?.name || "").trim().toLowerCase();
-  const sourceName = String(project?.sourceName || "").trim().toLowerCase();
-  return workspacePath || sourcePath || `${sourceName}::${name}` || `project-${index}`;
-}
-
-function getProjectOverviewLabel(project = {}) {
-  const name = String(project?.name || project?.sourceName || "(unnamed project)").trim() || "(unnamed project)";
-  const stage = formatProjectStageLabel(project?.currentStage);
-  return `${name} | ${stage}`;
-}
-
-function formatProjectStageLabel(stage = "") {
-  const normalized = String(stage || "").trim().toLowerCase();
-  if (normalized === "active") return "Working";
-  if (normalized === "workspace") return "In workspace";
-  if (normalized === "completed") return "Ready output";
-  if (normalized === "archived") return "Archived";
-  if (normalized === "intake") return "In intake";
-  return "History";
-}
-
-function projectStagePillClass(stage = "") {
-  const normalized = String(stage || "").trim().toLowerCase();
-  if (["active", "workspace", "completed"].includes(normalized)) return "on";
-  if (normalized === "archived") return "";
-  return "off";
-}
-
-function renderProjectMiniStat(label, value, hint = "", tone = "") {
-  return `
-    <div class="project-mini-stat ${tone}">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(String(value || 0))}</strong>
-      ${hint ? `<div class="micro">${escapeHtml(hint)}</div>` : ""}
-    </div>
-  `;
-}
-
-function renderProjectChecklistPanel(title, bucket = {}, { objective = "", emptyText = "No items recorded." } = {}) {
-  const checked = Array.isArray(bucket?.checked) ? bucket.checked : [];
-  const unchecked = Array.isArray(bucket?.unchecked) ? bucket.unchecked : [];
-  const checkedCount = Number(bucket?.checkedCount || checked.length);
-  const uncheckedCount = Number(bucket?.uncheckedCount || unchecked.length);
-  const total = checkedCount + uncheckedCount;
-  const previewLines = [
-    ...unchecked.slice(0, 3).map((item) => `<div class="project-check-item open">${escapeHtml(item)}</div>`),
-    ...checked.slice(0, 2).map((item) => `<div class="project-check-item done">${escapeHtml(item)}</div>`)
-  ];
-  return `
-    <div class="project-checklist-panel">
-      <div class="project-checklist-head">
-        <strong>${escapeHtml(title)}</strong>
-        <span class="summary-pill ${uncheckedCount ? "" : "on"}">${escapeHtml(total ? `${checkedCount}/${total}` : "0/0")}</span>
-      </div>
-      <div class="micro">${escapeHtml(uncheckedCount ? `${uncheckedCount} open` : "Nothing open")}${checkedCount ? ` | ${escapeHtml(`${checkedCount} done`)}` : ""}</div>
-      ${objective ? `<div class="project-directive-objective">${escapeHtml(objective)}</div>` : ""}
-      ${previewLines.length ? previewLines.join("") : `<div class="panel-subtle">${escapeHtml(emptyText)}</div>`}
-    </div>
-  `;
-}
-
-function renderProjectTaskLine(task = {}, label = "Task") {
-  const meta = [
-    String(task?.requestedBrainLabel || "").trim(),
-    String(task?.status || "").trim().replaceAll("_", " "),
-    task?.updatedAt ? formatDateTime(task.updatedAt) : ""
-  ].filter(Boolean).join(" | ");
-  const roleMeta = String(task?.roleName || "").trim()
-    ? `Role: ${String(task.roleName || "").trim()}${task?.roleReason ? ` | ${String(task.roleReason || "").trim()}` : ""}`
-    : "";
-  return `
-    <div class="project-activity-item">
-      <div class="history-meta">
-        <span>${escapeHtml(String(task?.codename || task?.id || label).trim() || label)}</span>
-        ${meta ? `<span>${escapeHtml(meta)}</span>` : ""}
-      </div>
-      <div class="history-body">${escapeHtml(String(task?.focus || "").trim() || "No focus recorded.")}</div>
-      ${roleMeta ? `<div class="micro">${escapeHtml(roleMeta)}</div>` : ""}
-      ${task?.summary ? `<div class="micro">${escapeHtml(String(task.summary || "").trim())}</div>` : ""}
-    </div>
-  `;
-}
-
-function renderProjectJobLine(job = {}) {
-  const meta = [
-    String(job?.latestRequestedBrainLabel || "").trim(),
-    String(job?.finalStatus || "").trim().replaceAll("_", " "),
-    job?.updatedAt ? formatDateTime(job.updatedAt) : ""
-  ].filter(Boolean).join(" | ");
-  const extra = [
-    Number(job?.attemptCount || 0) > 1 ? `${Number(job.attemptCount || 0)} attempts` : "1 attempt",
-    String(job?.finalFailureClassification || "").trim() && String(job?.finalFailureClassification || "").trim() !== "unknown"
-      ? String(job.finalFailureClassification).trim()
-      : ""
-  ].filter(Boolean).join(" | ");
-  const roleMeta = String(job?.roleName || "").trim()
-    ? `Role: ${String(job.roleName || "").trim()}${job?.roleReason ? ` | ${String(job.roleReason || "").trim()}` : ""}`
-    : "";
-  return `
-    <div class="project-activity-item">
-      <div class="history-meta">
-        <span>${escapeHtml(String(job?.latestCodename || job?.latestTaskId || "Job").trim() || "Job")}</span>
-        ${meta ? `<span>${escapeHtml(meta)}</span>` : ""}
-      </div>
-      <div class="history-body">${escapeHtml(String(job?.focus || "").trim() || "No objective recorded.")}</div>
-      ${roleMeta ? `<div class="micro">${escapeHtml(roleMeta)}</div>` : ""}
-      ${extra ? `<div class="micro">${escapeHtml(extra)}</div>` : ""}
-    </div>
-  `;
-}
-
-function renderProjectRoleReportCard(role = {}) {
-  const unchecked = Array.isArray(role?.unchecked) ? role.unchecked : [];
-  const checked = Array.isArray(role?.checked) ? role.checked : [];
-  const recommended = Array.isArray(role?.recommended) ? role.recommended : [];
-  const status = String(role?.status || "").trim().toLowerCase();
-  const pillClass = status === "completed" ? "on" : status === "active" ? "" : "off";
-  const statusLabel = status === "completed"
-    ? "Closed"
-    : status === "active"
-      ? "Working"
-      : "Planned";
-  const preview = unchecked.length ? unchecked : checked.length ? checked : recommended;
-  return `
-    <div class="project-role-card">
-      <div class="project-role-head">
-        <strong>${escapeHtml(String(role?.name || "Role").trim() || "Role")}</strong>
-        <span class="summary-pill ${pillClass}">${escapeHtml(statusLabel)}</span>
-      </div>
-      <div class="micro">${escapeHtml(`${Number(role?.uncheckedCount || unchecked.length)} open | ${Number(role?.checkedCount || checked.length)} done`)}</div>
-      ${role?.reason ? `<div class="project-role-reason">${escapeHtml(String(role.reason || "").trim())}</div>` : ""}
-      ${preview.length
-        ? preview.slice(0, 3).map((item) => `<div class="project-check-item ${unchecked.length ? "open" : checked.length ? "done" : ""}">${escapeHtml(String(item || "").trim())}</div>`).join("")
-        : `<div class="panel-subtle">${escapeHtml(String(role?.playbook || "No role summary yet.").trim() || "No role summary yet.")}</div>`}
-    </div>
-  `;
-}
-
-function renderProjectArtifactLine(entry = {}, label = "History") {
-  const meta = [
-    label,
-    entry?.occurredAt ? formatDateTime(entry.occurredAt) : "Unknown time"
-  ].filter(Boolean).join(" | ");
-  const extra = [
-    String(entry?.reason || "").trim(),
-    String(entry?.label || "").trim()
-  ].filter(Boolean).join(" | ");
-  return `
-    <div class="project-activity-item">
-      <div class="history-meta"><span>${escapeHtml(meta)}</span></div>
-      <div class="history-body">${escapeHtml(String(entry?.path || "").trim() || "Path unavailable.")}</div>
-      ${extra ? `<div class="micro">${escapeHtml(extra)}</div>` : ""}
-    </div>
-  `;
-}
-
-function renderCompletedProjectJobCard(entry = {}) {
-  const job = entry?.job && typeof entry.job === "object" ? entry.job : null;
-  const projectName = String(entry?.projectName || "(unnamed project)").trim() || "(unnamed project)";
-  const sourceName = String(entry?.sourceName || "").trim();
-  const statusLabel = job?.finalStatus
-    ? String(job.finalStatus || "").trim().replaceAll("_", " ")
-    : "exported";
-  const when = job?.updatedAt
-    ? formatDateTime(job.updatedAt)
-    : (entry?.outputAt ? formatDateTime(entry.outputAt) : "Unknown time");
-  const focus = String(job?.focus || "").trim() || "Exported project snapshot";
-  const detailBits = [
-    sourceName && sourceName !== projectName ? `Source: ${sourceName}` : "",
-    String(entry?.stage || "").trim() ? `Panel: ${formatProjectStageLabel(entry.stage)}` : "",
-    entry?.outputPath ? "Ready output recorded" : ""
-  ].filter(Boolean).join(" | ");
-  const attemptBits = job
-    ? [
-      Number(job?.attemptCount || 0) > 1 ? `${Number(job.attemptCount || 0)} attempts` : "1 attempt",
-      String(job?.finalFailureClassification || "").trim() && String(job?.finalFailureClassification || "").trim() !== "unknown"
-        ? String(job.finalFailureClassification).trim()
-        : ""
-    ].filter(Boolean).join(" | ")
-    : "";
-  return `
-    <article class="project-overview-card">
-      <div class="project-overview-head">
-        <div class="project-overview-title">
-          <div class="project-overview-title-row">
-            <h4>${escapeHtml(projectName)}</h4>
-            <span class="summary-pill on">${escapeHtml(statusLabel)}</span>
-          </div>
-          <div class="panel-subtle">${escapeHtml(when)}</div>
-          ${detailBits ? `<div class="micro">${escapeHtml(detailBits)}</div>` : ""}
-        </div>
-      </div>
-      <div class="project-overview-grid">
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Completed Work</strong>
-          </div>
-          <div class="project-activity-list">
-            <div class="project-activity-item">
-              <div class="history-body">${escapeHtml(focus)}</div>
-              ${job?.roleName ? `<div class="micro">${escapeHtml(`Role: ${String(job.roleName || "").trim()}${job?.roleReason ? ` | ${String(job.roleReason || "").trim()}` : ""}`)}</div>` : ""}
-              ${attemptBits ? `<div class="micro">${escapeHtml(attemptBits)}</div>` : ""}
-            </div>
-          </div>
-        </section>
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Output</strong>
-          </div>
-          <div class="project-activity-list">
-            ${entry?.outputPath
-              ? `<div class="project-activity-item"><div class="history-body">${escapeHtml(String(entry.outputPath || "").trim())}</div></div>`
-              : `<div class="panel-subtle">No ready-output path recorded for this completed job.</div>`}
-          </div>
-        </section>
-      </div>
-    </article>
-  `;
-}
-
-function renderProjectOverviewCard(project = {}) {
-  const source = project?.source && typeof project.source === "object" ? project.source : {};
-  const workspace = project?.workspace && typeof project.workspace === "object" ? project.workspace : {};
-  const checklist = project?.checklist && typeof project.checklist === "object" ? project.checklist : {};
-  const checklistTotals = checklist?.totals && typeof checklist.totals === "object" ? checklist.totals : {};
-  const history = project?.history && typeof project.history === "object" ? project.history : {};
-  const readyExports = Array.isArray(history.readyExports) ? history.readyExports : [];
-  const archivedExports = Array.isArray(history.archivedExports) ? history.archivedExports : [];
-  const backups = Array.isArray(history.backups) ? history.backups : [];
-  const activeTasks = Array.isArray(project.activeTasks) ? project.activeTasks : [];
-  const waitingTasks = Array.isArray(project.waitingTasks) ? project.waitingTasks : [];
-  const recentJobs = Array.isArray(project.recentJobs) ? project.recentJobs : [];
-  const roleReports = Array.isArray(project.roleReports) ? project.roleReports : [];
-  const settledJobs = recentJobs.filter((entry) => !["queued", "in_progress", "waiting_for_user"].includes(String(entry?.finalStatus || "").trim()));
-  const latestReady = readyExports[0] || null;
-  const latestArchive = archivedExports[0] || null;
-  const latestBackup = backups[0] || null;
-  const currentLocation = workspace?.present
-    ? `Workspace: ${workspace.path}`
-    : source?.present
-      ? `Intake: ${source.path}`
-      : latestReady?.path
-        ? `Latest ready output: ${latestReady.path}`
-        : latestArchive?.path
-          ? `Latest archive: ${latestArchive.path}`
-          : latestBackup?.path
-            ? `Latest backup: ${latestBackup.path}`
-            : "No tracked location yet.";
-  const intakeState = source?.present
-    ? `Available${source.modifiedAt ? ` | ${formatDateTime(source.modifiedAt)}` : ""}`
-    : String(project?.sourceName || "").trim()
-      ? `Seen as ${String(project.sourceName).trim()}`
-      : "Not seen";
-  const workspaceState = workspace?.present
-    ? `${workspace.activeTaskCount ? `${workspace.activeTaskCount} active` : "Idle"}${workspace.waitingTaskCount ? ` | ${workspace.waitingTaskCount} waiting` : ""}`
-    : "Not in workspace";
-  const outputState = latestReady
-    ? `Ready | ${formatDateTime(latestReady.occurredAt)}`
-    : latestArchive
-      ? `Archived | ${formatDateTime(latestArchive.occurredAt)}`
-      : "Not exported";
-  const historyState = backups.length
-    ? `${backups.length} backup${backups.length === 1 ? "" : "s"}${latestBackup?.occurredAt ? ` | ${formatDateTime(latestBackup.occurredAt)}` : ""}`
-    : "No backups";
-  const outputHistoryHtml = [
-    ...readyExports.slice(0, 2).map((entry) => renderProjectArtifactLine(entry, "Ready export")),
-    ...archivedExports.slice(0, 2).map((entry) => renderProjectArtifactLine(entry, "Archive")),
-    ...backups.slice(0, 2).map((entry) => renderProjectArtifactLine(entry, "Backup"))
-  ].join("");
-
-  return `
-    <article class="project-overview-card">
-      <div class="project-overview-head">
-        <div class="project-overview-title">
-          <div class="project-overview-title-row">
-            <h4>${escapeHtml(String(project?.name || project?.sourceName || "(unnamed project)").trim() || "(unnamed project)")}</h4>
-            <span class="summary-pill ${projectStagePillClass(project?.currentStage)}">${escapeHtml(formatProjectStageLabel(project?.currentStage))}</span>
-          </div>
-          <div class="panel-subtle">${escapeHtml(project?.sourceName && project.sourceName !== project.name ? `Source project: ${project.sourceName}` : "Project overview")}</div>
-          <div class="micro" title="${escapeAttr(currentLocation)}">${escapeHtml(currentLocation)}</div>
-        </div>
-        <div class="project-mini-stats">
-          ${renderProjectMiniStat("Open items", checklistTotals?.openItems || 0, checklistTotals?.totalItems ? `${checklistTotals.completionPercent || 0}% complete` : "No checklist")}
-          ${renderProjectMiniStat("Active jobs", project?.metrics?.activeJobs || 0, activeTasks.length ? `${activeTasks.length} live` : "No live work", activeTasks.length ? "tone-warn" : "")}
-          ${renderProjectMiniStat("Completed jobs", project?.metrics?.completedJobs || 0, settledJobs.length ? `${settledJobs.length} recent` : "No finished jobs", "tone-ok")}
-          ${renderProjectMiniStat("Failures", project?.metrics?.failedJobs || 0, archivedExports.length ? `${archivedExports.length} archived` : "No recent failures", (project?.metrics?.failedJobs || 0) ? "tone-bad" : "")}
-        </div>
-      </div>
-
-      <div class="project-stage-grid">
-        <div class="project-stage-card">
-          <strong>Intake</strong>
-          <div class="micro">${escapeHtml(intakeState)}</div>
-        </div>
-        <div class="project-stage-card">
-          <strong>Workspace</strong>
-          <div class="micro">${escapeHtml(workspaceState)}</div>
-        </div>
-        <div class="project-stage-card">
-          <strong>Output</strong>
-          <div class="micro">${escapeHtml(outputState)}</div>
-        </div>
-        <div class="project-stage-card">
-          <strong>History</strong>
-          <div class="micro">${escapeHtml(historyState)}</div>
-        </div>
-      </div>
-
-      <div class="project-overview-grid">
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Checklist Status</strong>
-            <span class="micro">${escapeHtml(checklistTotals?.totalItems ? `${checklistTotals.completedItems || 0}/${checklistTotals.totalItems} requirements closed` : "No tracked requirements yet")}</span>
-          </div>
-          <div class="project-checklist-grid">
-            ${renderProjectChecklistPanel("Todo", checklist?.todo, { emptyText: "No PROJECT-TODO.md items yet." })}
-            ${renderProjectChecklistPanel("Roles", checklist?.roles, { emptyText: "No role-board items yet." })}
-            ${renderProjectChecklistPanel("Directive", checklist?.directive, {
-              objective: String(checklist?.directive?.objective || "").trim(),
-              emptyText: "No directive checklist detected."
-            })}
-          </div>
-        </section>
-
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Working Roles</strong>
-            <span class="micro">${escapeHtml(roleReports.length ? `${roleReports.length} active or planned role${roleReports.length === 1 ? "" : "s"}` : "No role report yet")}</span>
-          </div>
-          <div class="project-role-grid">
-            ${roleReports.length
-              ? roleReports.map((role) => renderProjectRoleReportCard(role)).join("")
-              : `<div class="panel-subtle">Nova has not selected working roles for this project yet.</div>`}
-          </div>
-        </section>
-
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Current Work</strong>
-            <span class="micro">${escapeHtml(waitingTasks.length ? `${waitingTasks.length} waiting for Nova` : activeTasks.length ? `${activeTasks.length} active package${activeTasks.length === 1 ? "" : "s"}` : "No live work right now")}</span>
-          </div>
-          <div class="project-activity-list">
-            ${activeTasks.length
-              ? activeTasks.map((task) => renderProjectTaskLine(task, "Active task")).join("")
-              : waitingTasks.length
-                ? waitingTasks.map((task) => renderProjectTaskLine(task, "Waiting task")).join("")
-                : `<div class="panel-subtle">No active project-cycle work is running for this project.</div>`}
-          </div>
-        </section>
-
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Job History</strong>
-            <span class="micro">${escapeHtml(settledJobs.length ? "Recent finished jobs for this project" : "No finished jobs recorded yet")}</span>
-          </div>
-          <div class="project-activity-list">
-            ${settledJobs.length
-              ? settledJobs.slice(0, 5).map((job) => renderProjectJobLine(job)).join("")
-              : `<div class="panel-subtle">No completed or failed project jobs are recorded yet.</div>`}
-          </div>
-        </section>
-
-        <section class="project-overview-section">
-          <div class="project-section-head">
-            <strong>Output History</strong>
-            <span class="micro">${escapeHtml(readyExports.length ? `${readyExports.length} ready export${readyExports.length === 1 ? "" : "s"}` : backups.length ? `${backups.length} backup snapshot${backups.length === 1 ? "" : "s"}` : "No output history yet")}</span>
-          </div>
-          <div class="project-activity-list">
-            ${outputHistoryHtml || `<div class="panel-subtle">No output or backup history recorded yet.</div>`}
-          </div>
-        </section>
-      </div>
-    </article>
-  `;
-}
-
-async function loadProjectConfig() {
-  projectsHintEl.textContent = "Loading project configuration...";
-  try {
-    const r = await fetch("/api/projects/config");
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "failed to load project configuration");
+  const capabilityProviders = new Map();
+  for (const plugin of plugins) {
+    const pluginLabel = String(plugin.name || plugin.id || "Plugin").trim() || "Plugin";
+    const capabilities = Array.isArray(plugin.capabilities) ? plugin.capabilities : [];
+    for (const capability of capabilities) {
+      const capabilityName = String(capability || "").trim();
+      if (!capabilityName) {
+        continue;
+      }
+      const providers = capabilityProviders.get(capabilityName) || [];
+      providers.push(pluginLabel);
+      capabilityProviders.set(capabilityName, [...new Set(providers)]);
     }
-    projectConfigDraft = cloneJson(j);
-    renderProjectConfigEditor();
-    projectsHintEl.textContent = "Project configuration loaded.";
-  } catch (error) {
-    projectsHintEl.textContent = `Failed to load project configuration: ${error.message}`;
-    projectConfigDraft = null;
-    renderProjectConfigEditor();
   }
+  const capabilityEntries = [...capabilityProviders.entries()].sort((left, right) => left[0].localeCompare(right[0]));
+  pluginCapabilityListEl.innerHTML = capabilityEntries.length
+    ? capabilityEntries.map(([capabilityName, providers]) => `
+      <div class="brain-row">
+        <div class="brain-row-actions">
+          <strong>${escapeHtml(capabilityName)}</strong>
+          <span class="brain-pill">${escapeHtml(`${providers.length} provider${providers.length === 1 ? "" : "s"}`)}</span>
+        </div>
+        <div class="micro">${escapeHtml(providers.join(", "))}</div>
+      </div>
+    `).join("")
+    : `<div class="panel-subtle">No plugin capabilities are currently registered.</div>`;
+
+  const routePlugins = plugins
+    .map((plugin) => ({
+      id: String(plugin.id || "").trim(),
+      name: String(plugin.name || plugin.id || "Plugin").trim() || "Plugin",
+      routes: Array.isArray(plugin.routes) ? plugin.routes : []
+    }))
+    .filter((entry) => entry.routes.length);
+
+  pluginRouteListEl.innerHTML = routePlugins.length
+    ? routePlugins.map((plugin) => `
+      <div class="brain-row">
+        <div class="brain-row-actions">
+          <strong>${escapeHtml(plugin.name)}</strong>
+          <span class="brain-pill">${escapeHtml(`${plugin.routes.length} route${plugin.routes.length === 1 ? "" : "s"}`)}</span>
+        </div>
+        <div class="micro">${escapeHtml(plugin.id)}</div>
+        <div class="plugin-route-stack">
+          ${plugin.routes.map((route) => `
+            <div class="plugin-route-item">
+              <span class="plugin-route-method">${escapeHtml(String(route.method || "GET").toUpperCase())}</span>
+              <span>${escapeHtml(String(route.path || ""))}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `).join("")
+    : `<div class="panel-subtle">No plugin routes are currently registered.</div>`;
+
+  renderPluginDynamicPanels();
+  setPluginControlsAvailability();
 }
 
-async function saveProjectConfig() {
-  if (!projectConfigDraft) {
+async function loadPluginPermissionRules(options = {}) {
+  if (!pluginPermissionRulesEditorEl || !pluginPermissionRulesStatusEl) {
     return;
   }
-  saveProjectsBtn.disabled = true;
-  projectsHintEl.textContent = "Saving project configuration...";
+  if (!isPluginInstalled("security")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  if (!options.silent) {
+    pluginPermissionRulesStatusEl.textContent = "Loading permission rules...";
+  }
   try {
-    const r = await fetch("/api/projects/config", {
+    const r = await pluginAdminFetch("/api/plugins/security/permissions/rules");
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to load permission rules");
+    }
+    pluginPermissionRulesDraft = cloneJson(j.rules || {});
+    pluginPermissionRulesEditorEl.value = `${JSON.stringify(pluginPermissionRulesDraft, null, 2)}\n`;
+    const ruleCount = Array.isArray(pluginPermissionRulesDraft.rules) ? pluginPermissionRulesDraft.rules.length : 0;
+    pluginPermissionRulesStatusEl.textContent = `Loaded permission rules (${ruleCount} rule${ruleCount === 1 ? "" : "s"}).`;
+  } catch (error) {
+    pluginPermissionRulesStatusEl.textContent = `Failed to load permission rules: ${error.message}`;
+  }
+}
+
+async function savePluginPermissionRules() {
+  if (!pluginPermissionRulesEditorEl || !pluginPermissionRulesStatusEl || !savePluginPermissionsBtn) {
+    return;
+  }
+  if (!isPluginInstalled("security")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const rawValue = String(pluginPermissionRulesEditorEl.value || "").trim();
+  if (!rawValue) {
+    pluginPermissionRulesStatusEl.textContent = "Enter rules JSON first.";
+    return;
+  }
+  savePluginPermissionsBtn.disabled = true;
+  pluginPermissionRulesStatusEl.textContent = "Saving permission rules...";
+  try {
+    const parsed = JSON.parse(rawValue);
+    const r = await pluginAdminFetch("/api/plugins/security/permissions/rules", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        projects: projectConfigDraft.projects || {}
-      })
+      body: JSON.stringify(parsed)
     });
     const j = await r.json();
     if (!r.ok || !j.ok) {
-      throw new Error(j.error || "failed to save project configuration");
+      throw new Error(j.error || "failed to save permission rules");
     }
-    projectConfigDraft = cloneJson(j);
-    renderProjectConfigEditor();
-    projectsHintEl.textContent = j.message || "Project configuration saved.";
-    await loadRuntimeOptions();
-    await loadCronJobs();
-    await loadTaskQueue();
+    pluginPermissionRulesDraft = cloneJson(j.rules || {});
+    pluginPermissionRulesEditorEl.value = `${JSON.stringify(pluginPermissionRulesDraft, null, 2)}\n`;
+    const ruleCount = Array.isArray(pluginPermissionRulesDraft.rules) ? pluginPermissionRulesDraft.rules.length : 0;
+    pluginPermissionRulesStatusEl.textContent = `Saved permission rules (${ruleCount} rule${ruleCount === 1 ? "" : "s"}).`;
   } catch (error) {
-    projectsHintEl.textContent = `Save failed: ${error.message}`;
+    pluginPermissionRulesStatusEl.textContent = `Save failed: ${error.message}`;
   } finally {
-    saveProjectsBtn.disabled = false;
+    savePluginPermissionsBtn.disabled = false;
+  }
+}
+
+function getPluginLifecycleTaskId() {
+  const value = String(pluginTaskLifecycleTaskIdEl?.value || "").trim();
+  if (value) {
+    pluginTaskLifecycleLastTaskId = value;
+    return value;
+  }
+  return String(pluginTaskLifecycleLastTaskId || "").trim();
+}
+
+function setPluginLifecycleTaskId(taskId = "") {
+  const normalized = String(taskId || "").trim();
+  if (!normalized) {
+    return;
+  }
+  pluginTaskLifecycleLastTaskId = normalized;
+  if (pluginTaskLifecycleTaskIdEl) {
+    pluginTaskLifecycleTaskIdEl.value = normalized;
+  }
+}
+
+async function requestPluginLifecycle(path, options = {}) {
+  const response = await pluginAdminFetch(path, options);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `request failed (${response.status})`);
+  }
+  return payload;
+}
+
+async function loadPluginTaskLifecycleOutput() {
+  if (!pluginTaskLifecycleStatusEl || !pluginTaskLifecycleResultEl) {
+    return;
+  }
+  if (!isPluginInstalled("task-lifecycle")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const taskId = getPluginLifecycleTaskId();
+  if (!taskId) {
+    pluginTaskLifecycleStatusEl.textContent = "Enter a task ID first.";
+    return;
+  }
+  pluginTaskLifecycleStatusEl.textContent = `Loading task output for ${taskId}...`;
+  try {
+    const payload = await requestPluginLifecycle(`/api/plugins/tasks/output?taskId=${encodeURIComponent(taskId)}`);
+    setPluginLifecycleTaskId(payload.output?.taskId || taskId);
+    const status = String(payload.output?.status || "").trim() || "unknown";
+    pluginTaskLifecycleStatusEl.textContent = `Loaded ${taskId} (${status}).`;
+    pluginTaskLifecycleResultEl.textContent = JSON.stringify(payload, null, 2);
+  } catch (error) {
+    pluginTaskLifecycleStatusEl.textContent = `Failed to load task output: ${error.message}`;
+    pluginTaskLifecycleResultEl.textContent = String(error?.message || error || "unknown error");
+  }
+}
+
+async function waitForPluginTaskLifecycleTask() {
+  if (!pluginTaskLifecycleStatusEl || !pluginTaskLifecycleResultEl || !pluginTaskLifecycleWaitBtn) {
+    return;
+  }
+  if (!isPluginInstalled("task-lifecycle")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const taskId = getPluginLifecycleTaskId();
+  if (!taskId) {
+    pluginTaskLifecycleStatusEl.textContent = "Enter a task ID first.";
+    return;
+  }
+  const timeoutMs = Math.max(1000, Math.min(Number(pluginTaskLifecycleTimeoutMsEl?.value || 30000), 10 * 60 * 1000));
+  pluginTaskLifecycleWaitBtn.disabled = true;
+  pluginTaskLifecycleStatusEl.textContent = `Waiting for ${taskId} (${timeoutMs}ms timeout)...`;
+  try {
+    const payload = await requestPluginLifecycle(
+      `/api/plugins/tasks/wait?taskId=${encodeURIComponent(taskId)}&timeoutMs=${encodeURIComponent(String(timeoutMs))}`
+    );
+    setPluginLifecycleTaskId(payload.output?.taskId || taskId);
+    const status = String(payload.status || payload.output?.status || "").trim() || "unknown";
+    pluginTaskLifecycleStatusEl.textContent = payload.done
+      ? `Task ${taskId} reached ${status}.`
+      : `Task ${taskId} is still ${status}.`;
+    pluginTaskLifecycleResultEl.textContent = JSON.stringify(payload, null, 2);
+  } catch (error) {
+    pluginTaskLifecycleStatusEl.textContent = `Wait failed: ${error.message}`;
+    pluginTaskLifecycleResultEl.textContent = String(error?.message || error || "unknown error");
+  } finally {
+    pluginTaskLifecycleWaitBtn.disabled = false;
+  }
+}
+
+async function createPluginLifecycleTask() {
+  if (!pluginTaskLifecycleStatusEl || !pluginTaskLifecycleResultEl || !pluginTaskLifecycleCreateBtn) {
+    return;
+  }
+  if (!isPluginInstalled("task-lifecycle")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const message = String(pluginTaskLifecycleCreateMessageEl?.value || "").trim();
+  if (!message) {
+    pluginTaskLifecycleStatusEl.textContent = "Enter a message for the task first.";
+    return;
+  }
+  pluginTaskLifecycleCreateBtn.disabled = true;
+  pluginTaskLifecycleStatusEl.textContent = "Creating queued task...";
+  try {
+    const payload = await requestPluginLifecycle("/api/plugins/tasks/create", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message,
+        sessionId: "Main",
+        internetEnabled: true,
+        selectedMountIds: getSelectedMountIds(),
+        forceToolUse: forceToolUseEl.checked,
+        requireWorkerPreflight: requireWorkerPreflightEl.checked,
+        notes: "Task created via Plugins > Task Lifecycle panel."
+      })
+    });
+    const taskId = String(payload.task?.id || "").trim();
+    if (taskId) {
+      setPluginLifecycleTaskId(taskId);
+    }
+    pluginTaskLifecycleStatusEl.textContent = taskId
+      ? `Created task ${taskId}.`
+      : "Created task.";
+    pluginTaskLifecycleResultEl.textContent = JSON.stringify(payload, null, 2);
+  } catch (error) {
+    pluginTaskLifecycleStatusEl.textContent = `Create failed: ${error.message}`;
+    pluginTaskLifecycleResultEl.textContent = String(error?.message || error || "unknown error");
+  } finally {
+    pluginTaskLifecycleCreateBtn.disabled = false;
+  }
+}
+
+async function stopPluginLifecycleTask() {
+  if (!pluginTaskLifecycleStatusEl || !pluginTaskLifecycleResultEl || !pluginTaskLifecycleStopBtn) {
+    return;
+  }
+  if (!isPluginInstalled("task-lifecycle")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const taskId = getPluginLifecycleTaskId();
+  if (!taskId) {
+    pluginTaskLifecycleStatusEl.textContent = "Enter a task ID first.";
+    return;
+  }
+  const force = pluginTaskLifecycleForceStopEl?.checked === true;
+  pluginTaskLifecycleStopBtn.disabled = true;
+  pluginTaskLifecycleStatusEl.textContent = `Stopping ${taskId}...`;
+  try {
+    const payload = await requestPluginLifecycle("/api/plugins/tasks/stop", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        taskId,
+        force,
+        reason: force
+          ? "Force-stopped from Plugins > Task Lifecycle panel."
+          : "Stopped from Plugins > Task Lifecycle panel."
+      })
+    });
+    setPluginLifecycleTaskId(String(payload.task?.id || taskId).trim());
+    pluginTaskLifecycleStatusEl.textContent = `Stop request applied to ${taskId}.`;
+    pluginTaskLifecycleResultEl.textContent = JSON.stringify(payload, null, 2);
+  } catch (error) {
+    pluginTaskLifecycleStatusEl.textContent = `Stop failed: ${error.message}`;
+    pluginTaskLifecycleResultEl.textContent = String(error?.message || error || "unknown error");
+  } finally {
+    pluginTaskLifecycleStopBtn.disabled = false;
+  }
+}
+
+async function answerPluginLifecycleTask() {
+  if (!pluginTaskLifecycleStatusEl || !pluginTaskLifecycleResultEl || !pluginTaskLifecycleAnswerBtn) {
+    return;
+  }
+  if (!isPluginInstalled("task-lifecycle")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const taskId = getPluginLifecycleTaskId();
+  if (!taskId) {
+    pluginTaskLifecycleStatusEl.textContent = "Enter a task ID first.";
+    return;
+  }
+  const answer = String(pluginTaskLifecycleAnswerEl?.value || "").trim();
+  if (!answer) {
+    pluginTaskLifecycleStatusEl.textContent = "Enter an answer first.";
+    return;
+  }
+  pluginTaskLifecycleAnswerBtn.disabled = true;
+  pluginTaskLifecycleStatusEl.textContent = `Sending answer for ${taskId}...`;
+  try {
+    const payload = await requestPluginLifecycle("/api/plugins/tasks/answer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        taskId,
+        answer,
+        sessionId: "Main"
+      })
+    });
+    setPluginLifecycleTaskId(String(payload.task?.id || taskId).trim());
+    pluginTaskLifecycleStatusEl.textContent = `Answer recorded for ${taskId}.`;
+    pluginTaskLifecycleResultEl.textContent = JSON.stringify(payload, null, 2);
+  } catch (error) {
+    pluginTaskLifecycleStatusEl.textContent = `Answer failed: ${error.message}`;
+    pluginTaskLifecycleResultEl.textContent = String(error?.message || error || "unknown error");
+  } finally {
+    pluginTaskLifecycleAnswerBtn.disabled = false;
+  }
+}
+
+async function loadPluginSessionMemoryState(options = {}) {
+  if (!pluginSessionMemoryStatusEl || !pluginSessionMemoryResultEl) {
+    return;
+  }
+  if (!isPluginInstalled("session-memory")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  if (!options.silent) {
+    pluginSessionMemoryStatusEl.textContent = "Loading session memory state...";
+  }
+  try {
+    const r = await pluginAdminFetch("/api/plugins/session-memory/state");
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to load session memory state");
+    }
+    const processedCount = Array.isArray(j.state?.processed) ? j.state.processed.length : 0;
+    const memoryPath = String(j.memoryPath || "").trim();
+    pluginSessionMemoryStatusEl.textContent = `${processedCount} task snapshot${processedCount === 1 ? "" : "s"} captured${memoryPath ? ` in ${memoryPath}` : ""}.`;
+    pluginSessionMemoryResultEl.textContent = JSON.stringify(j, null, 2);
+  } catch (error) {
+    pluginSessionMemoryStatusEl.textContent = `Failed to load session memory state: ${error.message}`;
+    pluginSessionMemoryResultEl.textContent = String(error?.message || error || "unknown error");
+  }
+}
+
+async function capturePluginSessionMemoryTask() {
+  if (!pluginSessionTaskIdEl || !pluginSessionMemoryStatusEl || !capturePluginSessionMemoryBtn) {
+    return;
+  }
+  if (!isPluginInstalled("session-memory")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  const taskId = String(pluginSessionTaskIdEl.value || "").trim();
+  if (!taskId) {
+    pluginSessionMemoryStatusEl.textContent = "Enter a task ID first.";
+    return;
+  }
+  capturePluginSessionMemoryBtn.disabled = true;
+  pluginSessionMemoryStatusEl.textContent = `Capturing session memory for ${taskId}...`;
+  try {
+    const r = await pluginAdminFetch("/api/plugins/session-memory/capture", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taskId })
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to capture session memory");
+    }
+    const captured = j.result?.captured === true;
+    const reason = String(j.result?.reason || "").trim();
+    pluginSessionMemoryStatusEl.textContent = captured
+      ? `Captured session memory for ${taskId}.`
+      : `Capture skipped for ${taskId}${reason ? ` (${reason.replaceAll("_", " ")})` : ""}.`;
+    pluginSessionMemoryResultEl.textContent = JSON.stringify(j, null, 2);
+    await loadPluginSessionMemoryState({ silent: true });
+  } catch (error) {
+    pluginSessionMemoryStatusEl.textContent = `Capture failed: ${error.message}`;
+    pluginSessionMemoryResultEl.textContent = String(error?.message || error || "unknown error");
+  } finally {
+    capturePluginSessionMemoryBtn.disabled = false;
+  }
+}
+
+async function loadPluginCronHardeningStatus(options = {}) {
+  if (!pluginCronStatusEl) {
+    return;
+  }
+  if (!isPluginInstalled("security")) {
+    setPluginControlsAvailability();
+    return;
+  }
+  if (!options.silent) {
+    pluginCronStatusEl.textContent = "Loading cron hardening status...";
+  }
+  try {
+    const r = await pluginAdminFetch("/api/plugins/security/cron/status");
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to load cron hardening status");
+    }
+    pluginCronStatusEl.textContent = JSON.stringify(j.status || {}, null, 2);
+  } catch (error) {
+    pluginCronStatusEl.textContent = `Failed to load cron hardening status: ${error.message}`;
+  }
+}
+
+async function loadPluginManagerPanel(options = {}) {
+  if (!pluginsHintEl) {
+    return;
+  }
+  if (!options.silent) {
+    pluginsHintEl.textContent = "Loading plugin manager...";
+  }
+  let catalog = null;
+  try {
+    const r = await pluginAdminFetch("/api/plugins/list");
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || "failed to load plugin manager");
+    }
+    catalog = cloneJson(j);
+  } catch (error) {
+    pluginCatalogDraft = null;
+    await renderPluginTopLevelTabs();
+    await renderPluginNovaTabs();
+    await renderPluginSecretsTabs();
+    if (observerApp && typeof observerApp === "object") {
+      delete observerApp.loadProjectsPluginPanel;
+      delete observerApp.refreshPluginNovaTabs;
+      delete observerApp.refreshStateBrowserPlugin;
+      delete observerApp.refreshPluginSecretsTabs;
+    }
+    renderPluginManagerPanel();
+    pluginsHintEl.textContent = `Failed to load plugin manager: ${error.message}`;
+    return;
+  }
+
+  pluginCatalogDraft = catalog;
+
+  try {
+    await renderPluginTopLevelTabs();
+  } catch (error) {
+    console.warn("failed to render plugin top-level tabs", error);
+  }
+
+  try {
+    await renderPluginNovaTabs();
+  } catch (error) {
+    console.warn("failed to render plugin nova tabs", error);
+  }
+
+  try {
+    await renderPluginSecretsTabs();
+  } catch (error) {
+    console.warn("failed to render plugin secrets tabs", error);
+  }
+
+  if (!isPluginInstalled("projects") && observerApp && typeof observerApp === "object") {
+    delete observerApp.loadProjectsPluginPanel;
+  }
+  if (!isPluginInstalled("state-browser") && observerApp && typeof observerApp === "object") {
+    delete observerApp.refreshStateBrowserPlugin;
+  }
+  if (observerApp && typeof observerApp === "object") {
+    if (normalizePluginUiNovaTabs().length) {
+      observerApp.refreshPluginNovaTabs = (options = {}) => refreshPluginNovaTabs(options);
+    } else {
+      delete observerApp.refreshPluginNovaTabs;
+    }
+    if (normalizePluginUiSecretsTabs().length) {
+      observerApp.refreshPluginSecretsTabs = (options = {}) => refreshPluginSecretsTabs(options);
+    } else {
+      delete observerApp.refreshPluginSecretsTabs;
+    }
+  }
+
+  try {
+    renderPluginManagerPanel();
+  } catch (error) {
+    console.warn("failed to render plugin manager panel", error);
+  }
+
+  const pluginCount = getInstalledPlugins().length;
+  const capabilityCount = Array.isArray(pluginCatalogDraft?.capabilities) ? pluginCatalogDraft.capabilities.length : 0;
+  pluginsHintEl.textContent = `Loaded ${pluginCount} plugin${pluginCount === 1 ? "" : "s"} with ${capabilityCount} ${capabilityCount === 1 ? "capability" : "capabilities"}.`;
+  if (options.loadDiagnostics !== false) {
+    const taskLifecyclePromise = getPluginLifecycleTaskId()
+      ? loadPluginTaskLifecycleOutput()
+      : Promise.resolve();
+    await Promise.allSettled([
+      loadPluginPermissionRules({ silent: true }),
+      taskLifecyclePromise,
+      loadPluginSessionMemoryState({ silent: true }),
+      loadPluginCronHardeningStatus({ silent: true })
+    ]);
   }
 }
 
@@ -4206,14 +4998,12 @@ function renderSecretPresenceTone(hasSecret) {
 }
 
 function renderSecretsCatalogEditor() {
-  if (!secretsOverviewListEl || !secretsMailListEl || !secretsWordPressListEl || !secretsRetrievalListEl || !secretsCustomListEl) {
+  if (!secretsOverviewListEl || !secretsRetrievalListEl || !secretsCustomListEl) {
     return;
   }
   if (!secretsCatalogDraft) {
     const unavailable = `<div class="panel-subtle">Secure keystore status is unavailable.</div>`;
     secretsOverviewListEl.innerHTML = unavailable;
-    secretsMailListEl.innerHTML = unavailable;
-    secretsWordPressListEl.innerHTML = unavailable;
     secretsRetrievalListEl.innerHTML = unavailable;
     secretsCustomListEl.innerHTML = unavailable;
     return;
@@ -4253,14 +5043,14 @@ function renderSecretsCatalogEditor() {
           <strong>Mail coverage</strong>
           <span class="brain-pill">${escapeHtml(`${mailStoredCount}/${mailAgents.length || 0}`)}</span>
         </div>
-        <div class="micro">${mail.enabled ? "Mail is enabled." : "Mail is disabled."} Active agent: ${escapeHtml(mail.activeAgentId || "(none)")}.</div>
+        <div class="micro">${mail.enabled ? "Mail is enabled." : "Mail is disabled."} Active agent: ${escapeHtml(mail.activeAgentId || "(none)")}. Configure passwords from the Mail plugin tab in Secrets.</div>
       </div>
       <div class="brain-row">
         <div class="brain-row-actions">
           <strong>WordPress coverage</strong>
           <span class="brain-pill">${escapeHtml(`${wordpressStoredCount}/${wordpressSites.length || 0}`)}</span>
         </div>
-        <div class="micro">${wordpressSites.length ? "Bridge sites are being tracked below." : "No WordPress bridge sites are configured."}</div>
+        <div class="micro">${wordpressSites.length ? "Bridge sites are being tracked through the WordPress plugin tab in Secrets." : "No WordPress bridge sites are configured."}</div>
       </div>
       <div class="brain-row">
         <div class="brain-row-actions">
@@ -4271,53 +5061,6 @@ function renderSecretsCatalogEditor() {
       </div>
     </div>
   `;
-
-  secretsMailListEl.innerHTML = mailAgents.length
-    ? mailAgents.map((agent) => {
-      const inputId = `secret-input-${hashId(`mail:${agent.passwordHandle}`)}`;
-      return `
-        <div class="secret-card">
-          <div class="panel-head compact">
-            <div>
-              <strong>${escapeHtml(agent.label || agent.id || "Mail agent")}</strong>
-              <div class="panel-subtle">${escapeHtml(agent.email || agent.user || agent.id || "")}${agent.active ? " | active agent" : ""}</div>
-            </div>
-            <span class="brain-pill ${renderSecretPresenceTone(agent.hasSecret)}">${escapeHtml(renderSecretPresenceLabel(agent.hasSecret))}</span>
-          </div>
-          <div class="micro"><strong>Handle:</strong> <code>${escapeHtml(agent.passwordHandle || "")}</code></div>
-          <div class="controls secret-controls">
-            <input id="${escapeAttr(inputId)}" type="password" placeholder="Enter mailbox password" />
-            <button class="secondary" type="button" data-secret-set="${escapeAttr(agent.passwordHandle || "")}" data-secret-input-id="${escapeAttr(inputId)}">Store</button>
-            <button class="secondary" type="button" data-secret-clear="${escapeAttr(agent.passwordHandle || "")}">Clear</button>
-          </div>
-        </div>
-      `;
-    }).join("")
-    : `<div class="panel-subtle">No mail agents are configured.</div>`;
-
-  secretsWordPressListEl.innerHTML = wordpressSites.length
-    ? wordpressSites.map((site) => {
-      const handle = String(site.sharedSecretHandle || "").trim();
-      const inputId = `secret-input-${hashId(`wp:${handle}`)}`;
-      return `
-        <div class="secret-card">
-          <div class="panel-head compact">
-            <div>
-              <strong>${escapeHtml(site.label || site.siteId || "WordPress site")}</strong>
-              <div class="panel-subtle">${escapeHtml(site.baseUrl || site.siteId || "")}</div>
-            </div>
-            <span class="brain-pill ${renderSecretPresenceTone(site.hasSecret)}">${escapeHtml(renderSecretPresenceLabel(site.hasSecret))}</span>
-          </div>
-          <div class="micro"><strong>Handle:</strong> <code>${escapeHtml(handle)}</code></div>
-          <div class="controls secret-controls">
-            <input id="${escapeAttr(inputId)}" type="password" placeholder="Enter WordPress shared secret" />
-            <button class="secondary" type="button" data-secret-set="${escapeAttr(handle)}" data-secret-input-id="${escapeAttr(inputId)}">Store</button>
-            <button class="secondary" type="button" data-secret-clear="${escapeAttr(handle)}">Clear</button>
-          </div>
-        </div>
-      `;
-    }).join("")
-    : `<div class="panel-subtle">No WordPress bridge sites are configured.</div>`;
 
   if (retrieval.apiKeyHandle) {
     const inputId = `secret-input-${hashId(`retrieval:${retrieval.apiKeyHandle}`)}`;
@@ -4473,11 +5216,13 @@ async function loadSecretsCatalog() {
     }
     secretsCatalogDraft = cloneJson(j.catalog);
     renderSecretsCatalogEditor();
+    observerApp.refreshPluginSecretsTabs?.({ source: "secrets-catalog" });
     const trackedCount = (Array.isArray(j.catalog?.suggestedHandles) ? j.catalog.suggestedHandles.length : 0);
     secretsHintEl.textContent = `Secure keystore status loaded. ${trackedCount} suggested handle${trackedCount === 1 ? "" : "s"} available.`;
   } catch (error) {
     secretsCatalogDraft = null;
     renderSecretsCatalogEditor();
+    observerApp.refreshPluginSecretsTabs?.({ source: "secrets-catalog-error" });
     secretsHintEl.textContent = `Failed to load secrets catalog: ${error.message}`;
   }
 }
@@ -4499,9 +5244,12 @@ async function storeSecretHandle(handle = "", value = "") {
       throw new Error(j.error || "failed to store secret");
     }
     secretsHintEl.textContent = `Stored ${j.secret.handle} in the secure keystore.`;
+    const mailRefresh = typeof observerApp.loadMailStatus === "function"
+      ? Promise.resolve(observerApp.loadMailStatus())
+      : Promise.resolve();
     await Promise.all([
       loadSecretsCatalog(),
-      loadMailStatus(),
+      mailRefresh,
       loadRuntimeOptions(),
       refreshStatus()
     ]);
@@ -4526,9 +5274,12 @@ async function clearSecretHandle(handle = "") {
       throw new Error(j.error || "failed to clear secret");
     }
     secretsHintEl.textContent = `Cleared ${j.secret.handle} from the secure keystore.`;
+    const mailRefresh = typeof observerApp.loadMailStatus === "function"
+      ? Promise.resolve(observerApp.loadMailStatus())
+      : Promise.resolve();
     await Promise.all([
       loadSecretsCatalog(),
-      loadMailStatus(),
+      mailRefresh,
       loadRuntimeOptions(),
       refreshStatus()
     ]);
@@ -4555,12 +5306,15 @@ async function loadRuntimeOptions() {
 }
 
 Object.assign(observerApp, {
+  getAdminUiToken,
+  adminFetch: pluginAdminFetch,
   loadStateInspector,
   loadTaskFile,
   loadTaskFiles,
   loadTaskQueue,
-  loadTodoList,
   loadTaskReshapeIssues,
+  registerPluginEventHandler: (prefix, handler) => { pluginEventHandlers.set(String(prefix), handler); },
+  registerTaskJobTypeHandler: (jobType, handler) => { taskJobTypeCompletedHandlers.set(String(jobType), handler); },
   replayWaitingQuestionThroughAvatar,
   loadRegressionSuites,
   runRegressionSuites,
@@ -4576,10 +5330,6 @@ Object.assign(observerApp, {
   speakAcknowledgement,
   speakWakeAcknowledgement,
   queueAcknowledgement,
-  activateCalendarSubtab,
-  formatCalendarDateKey,
-  parseCalendarInputValue,
-  resetCalendarForm,
   populateBrainOptions,
   getDefaultMountIds,
   getSelectedMountIds,
@@ -4592,30 +5342,34 @@ Object.assign(observerApp, {
   annotateNovaEmotion,
   pickTaskPhrase,
   buildTaskNarration,
-  buildMailObservation,
   isRemoteParallelMode,
   reportTaskEvent,
   syncInProgressTaskUpdates,
   pollTaskEvents,
-  loadMailStatus,
+  getNovaConfigDraft: () => novaConfigDraft,
   loadSecretsCatalog,
-  loadCalendarEvents,
-  loadPromptReview,
   resetToSimpleProjectState,
-  renderCalendarMonth,
-  updateCalendarFormState,
-  pollMailInbox,
-  sendMailMessage,
   loadBrainConfig,
   loadNovaConfig,
-  loadProjectConfig,
   renderSecretsCatalogEditor,
   loadToolConfig,
+  loadPluginManagerPanel,
+  installUploadedPluginPackage,
+  loadPluginPermissionRules,
+  savePluginPermissionRules,
+  loadPluginTaskLifecycleOutput,
+  waitForPluginTaskLifecycleTask,
+  createPluginLifecycleTask,
+  stopPluginLifecycleTask,
+  answerPluginLifecycleTask,
+  loadPluginSessionMemoryState,
+  capturePluginSessionMemoryTask,
+  loadPluginCronHardeningStatus,
   addBrainEndpointDraft,
   addCustomBrainDraft,
+  applyAppConfigToStage,
   saveBrainConfig,
   saveNovaConfig,
-  saveProjectConfig,
   saveToolConfig,
   storeSecretHandle,
   clearSecretHandle,
@@ -4624,7 +5378,6 @@ Object.assign(observerApp, {
   loadRuntimeOptions,
   setQueuePaused
 });
-})();
 
 // Live logs via SSE
 const es = new EventSource("/events/logs");
@@ -4643,68 +5396,12 @@ observerEvents.onmessage = (ev) => {
   if (data.type === "observer.connected") {
     return;
   }
-  if (data.type === "mail.message" && data.mail) {
-    const observation = observerApp.buildMailObservation(data.mail);
-    enqueueUpdate({
-      source: "mail",
-      title: "New mail",
-      displayText: observation.displayText,
-      spokenText: observation.spokenText,
-      rawText: observation.displayText,
-      status: "ok",
-      brainLabel: data.mail.agentLabel || "Mail"
-    }, { priority: true });
-    observerApp.loadMailStatus();
-    return;
-  }
-  if (data.type === "mail.command" && data.mail) {
-    const commandText = String(data.mail?.command?.text || "").trim();
-    const actionText = String(data.mail?.command?.action || "detected").replaceAll("_", " ");
-    enqueueUpdate({
-      source: "mail",
-      title: "Mail command",
-      displayText: `${String(data.mail.fromName || data.mail.fromAddress || "Someone")} sent a mail command.\n\nAction: ${actionText}${commandText ? `\nCommand: ${commandText}` : ""}`,
-      spokenText: observerApp.annotateNovaEmotion(`${String(data.mail.fromName || data.mail.fromAddress || "Someone")} sent a mail command. Action ${actionText}.`, "wave"),
-      rawText: commandText,
-      status: data.mail?.command?.action === "auto_queue" ? "queued" : "warn",
-      brainLabel: data.mail.agentLabel || "Mail"
-    }, { priority: true });
-    observerApp.loadMailStatus();
-    return;
-  }
-  if (data.type === "mail.quarantined" && data.mail) {
-    enqueueUpdate({
-      source: "mail",
-      title: "Mail quarantined",
-      displayText: `${String(data.mail.fromName || data.mail.fromAddress || "Someone")} was quarantined before review.\n\n${String(data.mail.subject || "(no subject)")}`,
-      spokenText: "",
-      rawText: "",
-      status: "warn",
-      brainLabel: data.mail.agentLabel || "Mail"
-    }, { priority: true });
-    observerApp.loadMailStatus();
-    return;
-  }
-  if (typeof data.type === "string" && data.type.startsWith("todo.")) {
-    observerApp.loadTaskQueue?.();
-    if (data.type === "todo.created" && data.todo?.createdBy === "nova") {
-      enqueueUpdate({
-        source: "task",
-        title: "To do added",
-        displayText: `I added this to your to do list.\n\n${String(data.todo.text || "").trim()}`,
-        spokenText: observerApp.annotateNovaEmotion(`I added this to your to do list. ${String(data.todo.text || "").trim()}`, "shrug"),
-        status: "waiting_for_user",
-        brainLabel: "Nova"
-      }, { priority: true });
-    } else if (data.type === "todo.reminder") {
-      enqueueUpdate({
-        source: "task",
-        title: "To do reminder",
-        displayText: String(data.text || "You have open to do items."),
-        spokenText: observerApp.annotateNovaEmotion(String(data.text || "You have open to do items."), "shrug"),
-        status: "waiting_for_user",
-        brainLabel: "Nova"
-      }, { priority: true });
+  if (typeof data.type === "string" && !data.task) {
+    for (const [prefix, handler] of pluginEventHandlers) {
+      if (data.type === prefix || data.type.startsWith(`${prefix}.`)) {
+        handler(data);
+        return;
+      }
     }
     return;
   }
@@ -4721,6 +5418,7 @@ observerEvents.onmessage = (ev) => {
     observerApp.reportTaskEvent(data.task);
   } else if (data.type === "task.completed" || data.type === "task.escalated" || data.type === "task.recovered") {
     observerApp.reportTaskEvent(data.task);
+    taskJobTypeCompletedHandlers.get(String(data.task?.internalJobType || ""))?.(data.task);
   }
   observerApp.loadTaskQueue();
 };
@@ -4735,3 +5433,6 @@ if ("speechSynthesis" in window) {
   window.addEventListener("pointerdown", unlockSpeech, { once: true });
   window.addEventListener("keydown", unlockSpeech, { once: true });
 }
+
+})();
+

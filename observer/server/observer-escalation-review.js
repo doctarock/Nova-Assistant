@@ -67,7 +67,10 @@ async function executeEscalationReviewJob(task) {
     const result = await runOllamaJsonGenerate(plannerBrain.model, escalationPrompt, {
       timeoutMs: 20000,
       keepAlive: MODEL_KEEPALIVE,
-      baseUrl: plannerBrain.ollamaBaseUrl
+      baseUrl: plannerBrain.ollamaBaseUrl,
+      brainId: plannerBrain.id,
+      leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `escalation:${String(task?.sessionId || "Main").trim() || "Main"}`,
+      leaseWaitMs: 2500
     });
     if (result.ok) {
       decision = extractJsonObject(result.text);

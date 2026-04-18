@@ -1,12 +1,23 @@
 ![Preview](https://repository-images.githubusercontent.com/1188661951/fd2bd3dd-5d6e-489e-9259-59c827988f06)
 
-A host-side orchestration application that combines:
+## Documentation
+
+- [Plugin System Developer Guide](docs/PLUGIN-SYSTEM.md)
+- [Semantic Compression Implementation Status](docs/IMPLEMENTATION_STATUS.md)
+- [Compression Quick Reference](docs/COMPRESSION_QUICK_REFERENCE.md)
+- [Semantic Compression Quick Start](docs/SEMANTIC_COMPRESSION_QUICK_START.md)
+- [Tool Loop Compression Guide](docs/TOOL_LOOP_COMPRESSION_GUIDE.md)
+
+---
+
+Nova is a host-side AI orchestration application that combines:
 - A web control panel
-- Multi-brain LLM routing and execution
-- A persistent task queue
-- Calendar, mail, finance, and project-cycle automation
+- Multi-brain LLM routing and execution across local and LAN endpoints
+- A persistent queue-first task system
 - Secure sandboxed tool execution in Docker
 - Retrieval and document intelligence (Qdrant-backed)
+- A plugin system for extending capabilities
+- Voice interface with trust-based command gating
 
 It is designed to run continuously as an autonomous or semi-autonomous operator while still allowing direct user supervision.
 
@@ -15,19 +26,13 @@ It is designed to run continuously as an autonomous or semi-autonomous operator 
 ### 2.1 Main UI and Control Surface
 
 The web UI includes dedicated tabs for:
-- `Nova` (identity, trust, environment, props, recreation, questions)
-- `Calendar`
-- `Mail`
-- `Projects`
-- `Queue`
-- `Jobs` (cron/schedules/history)
-- `Gateway` (runtime health and logs)
-- `Prompts` (live prompt previews)
-- `Brains` (models, endpoints, routing)
-- `Secrets`
-- `Tools` (tool/skill approvals and request tracking)
-- `State` (file/tree inspector and reset tools)
-- `Tests` (regression suite runner + command helper)
+- `Nova` — identity, voice preferences, questions, trust records
+- `Queue` — queued/in-progress/done/failed tasks, repairs, issues, schedules, history
+- `Brains` — model status, endpoints, base brains, specialists, routing config
+- `Secrets` — keychain handles for retrieval, mail, and custom secrets
+- `Capabilities` — tool catalog, installed skills, capability request tracking
+- `Plugins` — installed plugins, interfaces, operations
+- `System` — gateway health, intake state, SSE logs, regression test runner
 
 ### 2.2 Conversational Intake and Routing
 
@@ -38,6 +43,7 @@ The system supports:
 - Observer-native immediate responses for common requests (time/date/status-style prompts)
 - Prompt rewrite assistance using idle helper brains
 - Optional worker preflight for ambiguity checks and clarification
+- Multi-specialist routing across local and remote Ollama endpoints
 
 ### 2.3 Queue and Task Lifecycle
 
@@ -50,60 +56,7 @@ Queue functionality includes:
 - Reshape issue tracking and reset workflow
 - Queue pause/resume controls
 
-### 2.4 Calendar and To-Do
-
-Calendar functionality:
-- Event create/update/delete
-- Event state transitions (`active`, `completed`, `cancelled`)
-- Repeat scheduling (`daily`, `weekly`, `monthly`, `yearly`)
-- Optional Nova action payloads when events become due
-
-To-do functionality:
-- CRUD-like flow (`add`, `state update`, `remove`)
-- Shared backlog for user and Nova
-- Session-aware status updates
-
-### 2.5 Mail Operations
-
-Mail capabilities include:
-- IMAP polling and inbox status
-- SMTP sending
-- Move operations (trash/archive, by id/uid/filters/latest)
-- Optional unsure-email summary toggles
-- Mail trust assessment and command gating by source trust level
-- Mail-watch rule workflow for automated handling and user escalation on uncertain messages
-
-### 2.6 Finance Tracking
-
-Finance features include:
-- Finance entry listing/creation/update/deletion
-- Manual entries (income/expense, status, category, amounts, currency, timestamp)
-- Sync from recent mail to derive finance entries
-- Tracker summary metrics (tracked/paid/unpaid/net)
-- Financial-year style review views
-
-### 2.7 Projects and Pipeline Visibility
-
-Project-cycle features include:
-- Project config and system state management
-- Workspace project introspection and policy-driven handling
-- Checklist operations (remove item, add/remove role)
-- Pipeline list and pipeline trace endpoints
-- Role/playbook-aware planning and phase/workstream assessment
-- Project-cycle retry/recovery shaping and escalation-aware handoff logic
-- Completed project visibility after rotation/export
-
-### 2.8 Runtime and State Inspection
-
-Operational inspection includes:
-- Runtime status (brains, endpoint health, GPU, Qdrant, activity)
-- Runtime options/config snapshots
-- SSE logs and observer event streaming
-- File tree and file content inspection across scopes (`workspace`, `queue`, `runtime`, etc.)
-- Output file listing and download
-- Guided internal reset for simple-project state
-
-### 2.9 Voice Interface and Trust
+### 2.4 Voice Interface and Trust
 
 Voice functionality includes:
 - Browser speech synthesis and recognition integration
@@ -113,7 +66,7 @@ Voice functionality includes:
 - Command allow/block decisions using configured minimum voice trust level
 - Persisted trust records that unify email and voice identity concepts
 
-### 2.10 3D Avatar and Visual Stage
+### 2.5 3D Avatar and Visual Stage
 
 Avatar system includes:
 - Three.js rendering with GLTF model support
@@ -182,9 +135,25 @@ Skill features include:
 - Approved-skill gating before operational usage
 - Installed skill inventory and metadata
 
-## 7. Security and Isolation Model
+## 6. Plugin System
 
-### 7.1 Sandbox Model
+Plugins extend the observer at runtime without modifying core code:
+- Dynamic plugin loading from the plugins directory
+- Interface and operation registration
+- Plugin inventory visible in the Plugins UI tab
+- See [Plugin System Developer Guide](docs/PLUGIN-SYSTEM.md) for authoring details
+
+## 7. Semantic Compression
+
+Tool loop and shell output compression reduces context bloat during long task execution:
+- Automatic summarization of large tool outputs
+- Shell hook compression for verbose command output
+- Configurable compression thresholds
+- See [Compression Quick Reference](docs/COMPRESSION_QUICK_REFERENCE.md) for details
+
+## 8. Security and Isolation Model
+
+### 8.1 Sandbox Model
 
 Tool execution is isolated in a Docker container with:
 - Read-only root filesystem
@@ -193,15 +162,14 @@ Tool execution is isolated in a Docker container with:
 - PID/memory/CPU limits
 - Dedicated writable mounts only for allowed input/output/state paths
 
-### 7.2 Secrets Management
+### 8.2 Secrets Management
 
 Secrets are managed via OS keychain (`keytar`) with handles for:
 - Mail agent passwords
-- WordPress shared secrets
 - Retrieval/Qdrant API key
 - Custom handles
 
-### 7.3 Trust Controls
+### 8.3 Trust Controls
 
 Trust system supports:
 - Source trust levels (`unknown`, `known`, `trusted`)
@@ -209,26 +177,26 @@ Trust system supports:
 - Voice command minimum trust policy
 - Unified trust records with optional voice signature thresholds
 
-## 8. API Surface Summary (Grouped)
+## 9. API Surface Summary (Grouped)
 
 Primary route groups:
 - Runtime: `/api/runtime/*`, `/events/*`
 - Intake/run: `/api/agent/run`, `/api/tasks/triage`, `/api/prompts/review`
 - Queue/tasks: `/api/tasks/*`, `/api/queue/control`
 - Cron/jobs: `/api/cron/*`
-- Calendar/mail/todo: `/api/calendar/*`, `/api/mail/*`, `/api/finance/*`, `/api/todos/*`
-- Config/control: `/api/app/config`, `/api/brains/config`, `/api/projects/*`, `/api/tools/config`, `/api/secrets/*`
-- Inspection/output/regressions: `/api/inspect/*`, `/api/output/*`, `/api/regressions/*`
+- Config/control: `/api/app/config`, `/api/brains/config`, `/api/tools/config`, `/api/secrets/*`
+- Inspection/output: `/api/inspect/*`, `/api/output/*`
+- Regressions: `/api/regressions/*`
 
-## 9. Testing and Quality Features
+## 10. Testing and Quality Features
 
 Regression support includes:
 - Built-in suite definitions for intake, planner, worker, and related flows
-- UI-triggered regression execution
+- UI-triggered regression execution from the System tab
 - Latest persisted report retrieval
 - Generated command-line helper for external run parity (`run-regressions.js`)
 
-## 10. Runtime Dependencies and Deployment Shape
+## 11. Runtime Dependencies and Deployment Shape
 
 Expected runtime stack:
 - Host Node.js observer process (`node server.js`)
@@ -236,41 +204,40 @@ Expected runtime stack:
 - Docker sandbox container for tool execution
 - Qdrant for retrieval/search storage
 
-## 11. Feature Positioning Snapshot
+## 12. Feature Positioning Snapshot
 
 In practical terms, this application is:
 - A local AI operations console
 - A queue-first autonomous worker coordinator
-- A personal operations layer (mail/calendar/todo)
-- A project-cycle automation engine
 - A safety-conscious sandboxed tool runtime
+- A multi-brain routing layer across local and LAN Ollama endpoints
 
 # Handoff
 
-This repo no longer runs as an OpenClaw gateway stack, only the skill library remains integrated. The live system is a host-side Node observer with a Docker sandbox for LLM-controlled tools, plus Ollama for model execution.
+This repo runs as a host-side Node observer with a Docker sandbox for LLM-controlled tools, plus Ollama for model execution. There is no gateway container.
 
-Special note on security, the environment described is inherently secure, however, the interface is not currently suitable for open web facing.
+Special note on security: the environment described is inherently secure, however, the interface is not currently suitable for open web-facing use.
 
-The accuracy on the voice security is dubious. There is no spoofing protection on email trust. Use these features carefully, run this on a local envirnonment, you have been warned.
+The accuracy on the voice security is dubious. There is no spoofing protection on email trust. Use these features carefully and run this on a local environment.
 
-Trust settings are under the Nova tab, I do not currently have a walk through for the interface, my apologies.
+Trust settings are under the Nova tab.
 
 ## Current Setup
 
-- Repo root: `e:\AI\claw`
-- Observer app: `openclaw-observer`
+- Repo root: `<your-repo-path>`
+- Observer app: `observer/`
 - Observer URL: `http://127.0.0.1:3220/`
-- Observer server entry: `openclaw-observer/server.js`
-- Observer config: `openclaw-observer/observer.config.json`
-- Observer runtime root: `openclaw-observer/.observer-runtime`
-- User-facing output folder: `e:\AI\claw\observer-output`
+- Observer server entry: `observer/server.js`
+- Observer config: `observer/observer.config.json`
+- Observer runtime root: `observer/.observer-runtime`
+- User-facing output folder: `<your-repo-path>/observer-output`
 
 ## Runtime Shape
 
 The observer process runs directly on the host:
 
 - launch command: `node server.js`
-- working directory: `\workspace\`
+- working directory: `observer/`
 - it owns:
   - the web UI
   - the scheduler
@@ -285,9 +252,9 @@ The LLM does not get host shell access directly. Tool execution is isolated in D
 
 The LLM tool sandbox is the important security boundary.
 
-- container name: `\observer-sandbox`
+- container name: `observer-sandbox`
 - image name: `openclaw-safe`
-- named volume: `\observer-sandbox-state`
+- named volume: `observer-sandbox-state`
 - container home: `/home/openclaw`
 - internal working workspace: `/home/openclaw/.observer-sandbox/workspace`
 - host output export mount: `/home/openclaw/observer-output`
@@ -338,11 +305,11 @@ Current caveat:
 The live sandbox is allowed to access exactly three locations:
 
 - writable input share:
-  - `e:\AI\claw\observer-input` -> `/home/openclaw/observer-input`
+  - `<your-repo-path>/observer-input` -> `/home/openclaw/observer-input`
 - writable sandbox workspace:
   - Docker named volume `observer-sandbox-state` -> `/home/openclaw/.observer-sandbox/workspace`
 - writable output share:
-  - `e:\AI\claw\observer-output` -> `/home/openclaw/observer-output`
+  - `<your-repo-path>/observer-output` -> `/home/openclaw/observer-output`
 
 No other host bind mounts are allowed into the Nova runtime sandbox.
 
@@ -362,41 +329,38 @@ This is why the sandbox exists at all. Do not break the observer back out into d
 
 Containers that should normally exist:
 
-- `observer-sandbox`
-- `ollama`
-- `qdrant`
-
-There is no longer a long-lived `openclaw-gw` gateway container in the current design.
+- `observer-sandbox` (created dynamically by the observer on startup)
+- `nova-qdrant` (via docker-compose)
+- Ollama (managed separately)
 
 ## Models and Brains
 
-Enabled brains in `observer.config.json`:
+Enabled brains in `observer/observer.config.json`:
 
-- `intake`
-  - label: `CPU Intake`
-  - model: `qwen2.5:1.5b`
-  - role: user conversation, direct replies, local planning
-- `worker`
-  - label: `Qwen Worker`
-  - model: `qwen3.5:latest`
-  - role: queued tool-using work
+**Built-in (local):**
+- `intake` — Gemma 4 E4B, local Ollama, conversation and direct replies
+- `worker` — Gemma 4 26B, local Ollama, queued tool-using work
+- `helper` — Gemma 3 1B (disabled by default), speculative sidecar
 
-Defined but currently disabled:
-
-- `helper`
-  - label: `Shadow Helper`
-  - model: `gemma3:1b`
-  - intended role: speculative pre-triage / summarization sidecar
+**Remote specialists:**
+- `remote_cpu` — Qwen 3.5 4B, LAN CPU planner for triage and routing
+- `creative_worker` — Hermes 3, LAN GPU, creative and ideation tasks
+- `code_worker` — Qwen 2.5 Coder 7B, LAN GPU, code tasks
+- `vision_worker` — MiniCPM-V, LAN GPU, vision/image tasks
+- `retrieval_worker` — MXBAI Embed Large, LAN GPU, embedding and retrieval
+- `lappy_gpu_big` — Qwen 3.5 9B, laptop GPU, general tool-capable work
+- `lan_73_p4` — Qwen 3.5 9B, LAN P4 endpoint, general tool-capable work
+- `lap_planner` — FunctionGemma, laptop CPU, routing
 
 ## Mail
 
-Mail is handled by the observer process, not by Dockerized OpenClaw.
+Mail polling is configured in `observer/observer.config.json` and handled by the observer process.
 
-- IMAP host: `mail.example.net.au`
-- SMTP host: `mail.example.net.au`
-- active mailbox: `nova@example.net.au`
+- IMAP host: `mail.example.com`
+- SMTP host: `mail.example.com`
+- active mailbox: `nova@example.com`
 
-The observer currently supports:
+The observer supports:
 
 - inbox polling
 - sending mail
@@ -408,7 +372,7 @@ The observer currently supports:
 
 The queue is local to this observer and stored under:
 
-- `openclaw-observer/.observer-runtime/observer-task-queue`
+- `observer/.observer-runtime/observer-task-queue`
 
 Task folders:
 
@@ -429,13 +393,13 @@ Examples of internal recurring jobs:
 
 Editable prompt/memory files on the host:
 
-- `openclaw-observer/workspace-prompt-edit/AGENTS.md`
-- `openclaw-observer/workspace-prompt-edit/TOOLS.md`
-- `openclaw-observer/workspace-prompt-edit/SOUL.md`
-- `openclaw-observer/workspace-prompt-edit/USER.md`
-- `openclaw-observer/workspace-prompt-edit/MEMORY.md`
-- `openclaw-observer/workspace-prompt-edit/PERSONAL.md`
-- `openclaw-observer/workspace-prompt-edit/memory/...`
+- `observer/workspace-prompt-edit/AGENTS.md`
+- `observer/workspace-prompt-edit/TOOLS.md`
+- `observer/workspace-prompt-edit/SOUL.md`
+- `observer/workspace-prompt-edit/USER.md`
+- `observer/workspace-prompt-edit/MEMORY.md`
+- `observer/workspace-prompt-edit/PERSONAL.md`
+- `observer/workspace-prompt-edit/memory/...`
 
 These are copied into the sandbox workspace as seed content.
 
@@ -443,38 +407,16 @@ These are copied into the sandbox workspace as seed content.
 
 Host side:
 
-- repo root: `e:\AI\claw`
-- observer app: `e:\AI\claw\openclaw-observer`
-- output folder: `e:\AI\claw\observer-output`
-- runtime state: `e:\AI\claw\openclaw-observer\.observer-runtime`
+- repo root: `<your-repo-path>`
+- observer app: `<your-repo-path>/observer`
+- output folder: `<your-repo-path>/observer-output`
+- runtime state: `<your-repo-path>/observer/.observer-runtime`
 
 Sandbox side:
 
 - workspace: `/home/openclaw/.observer-sandbox/workspace`
 - input: `/home/openclaw/observer-input`
 - output: `/home/openclaw/observer-output`
-
-## Goal
-
-Replicate the current observer architecture on your current environment, not the older OpenClaw gateway stack.
-
-That means:
-
-- host-side Node observer
-- Docker sandbox for tool execution
-- Ollama for models
-- host-side `observer-output`
-- local runtime state under `.observer-runtime`
-
-## Priorities
-
-1. Get Docker Desktop working with WSL2.
-2. Get Ollama working locally.
-3. Clone/copy this repo to the laptop.
-4. Build the sandbox image.
-5. Start Qdrant.
-6. Start the observer.
-7. Verify the sandbox and mounts before enabling real work.
 
 ## Recommended Bring-Up
 
@@ -490,14 +432,14 @@ Build the sandbox image from the repo root:
 docker build -t openclaw-safe .
 ```
 
-Then start Qdrant and the observer from:
+Then start Qdrant and the observer:
 
 ```powershell
-cd e:\AI\claw
+cd <your-repo-path>
 docker compose up -d qdrant
 
 $env:QDRANT_URL="http://127.0.0.1:6333"
-cd e:\AI\claw\openclaw-observer
+cd <your-repo-path>\observer
 node server.js
 ```
 
@@ -511,15 +453,9 @@ Then verify:
 
 ## What Must Be Updated
 
-- host paths in `openclaw-observer/observer.config.json`
-- any machine-specific mail secrets if they differ
-
-Do not blindly migrate:
-
-- old OpenClaw gateway state
-- old `openclaw_state` assumptions
-- old port `3210`
-- old `openclaw-gw` container expectations
+- host paths in `observer/observer.config.json`
+- mail credentials via the Secrets tab (stored in OS keychain via keytar)
+- Ollama endpoint URLs if your LAN IPs differ from the defaults in config
 
 ## What To Preserve
 
@@ -531,4 +467,3 @@ Do not blindly migrate:
 - host-backed `observer-input`
 - prompt and memory scaffolding
 - local mail handling
-

@@ -126,13 +126,6 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           prompt: "find skills for mail automation",
           expectedType: "skill_search"
         },
-        {
-          id: "read-file",
-          label: "Read file",
-          kind: "intake",
-          prompt: "read \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\"",
-          expectedType: "read_file"
-        }
       ]
     },
     {
@@ -172,7 +165,7 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           id: "enqueue-file-summary",
           label: "Enqueue file summary",
           kind: "planner",
-          prompt: "read E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md and write a short risk summary",
+          prompt: "read E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md and write a short risk summary",
           expectedAction: "enqueue",
           requireShapedTask: true
         },
@@ -236,35 +229,35 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           id: "write-glumgame-summary",
           label: "Write project summary",
           kind: "worker",
-          prompt: "Read \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\" and write a concise project summary to \"E:\\AI\\claw\\observer-output\\worker-regression\\glumgame-summary.md\"",
+          prompt: "Read \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\" and write a concise project summary to \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\glumgame-summary.md\"",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "glumgame-summary.md")
         },
         {
           id: "rewrite-intake-checklist",
           label: "Rewrite intake checklist",
           kind: "worker",
-          prompt: "Read \"E:\\AI\\claw\\observer-output\\intake-immediate-regression-checklist.md\" and rewrite it as a short numbered operator checklist in \"E:\\AI\\claw\\observer-output\\worker-regression\\intake-operator-checklist.md\"",
+          prompt: "Read \"E:\\AI\\derpy-claw\\observer-output\\intake-immediate-regression-checklist.md\" and rewrite it as a short numbered operator checklist in \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\intake-operator-checklist.md\"",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "intake-operator-checklist.md")
         },
         {
           id: "heartbeat-vs-intake",
           label: "Heartbeat vs intake diff",
           kind: "worker",
-          prompt: "Compare \"E:\\AI\\claw\\observer-output\\heartbeat-status-update.md\" with \"E:\\AI\\claw\\observer-output\\intake-immediate-regression-checklist.md\" and write a short differences note to \"E:\\AI\\claw\\observer-output\\worker-regression\\heartbeat-vs-intake.md\"",
+          prompt: "Compare \"E:\\AI\\derpy-claw\\observer-output\\heartbeat-status-update.md\" with \"E:\\AI\\derpy-claw\\observer-output\\intake-immediate-regression-checklist.md\" and write a short differences note to \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\heartbeat-vs-intake.md\"",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "heartbeat-vs-intake.md")
         },
         {
           id: "glumgame-next-actions",
           label: "GlumGame next actions",
           kind: "worker",
-          prompt: "Inspect \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\" and extract a bullet list of concrete next actions into \"E:\\AI\\claw\\observer-output\\worker-regression\\glumgame-next-actions.md\"",
+          prompt: "Inspect \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\" and extract a bullet list of concrete next actions into \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\glumgame-next-actions.md\"",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "glumgame-next-actions.md")
         },
         {
           id: "no-change-proof",
           label: "No-change proof",
           kind: "worker",
-          prompt: "Inspect these three files and tell me whether there is an obvious safe formatting-only improvement without making changes. Name each inspected target in your conclusion: \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\", \"E:\\AI\\claw\\observer-output\\heartbeat-status-update.md\", \"E:\\AI\\claw\\observer-output\\intake-immediate-regression-checklist.md\"",
+          prompt: "Inspect these three files and tell me whether there is an obvious safe formatting-only improvement without making changes. Name each inspected target in your conclusion: \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\", \"E:\\AI\\derpy-claw\\observer-output\\heartbeat-status-update.md\", \"E:\\AI\\derpy-claw\\observer-output\\intake-immediate-regression-checklist.md\"",
           expectedNamedTargets: [
             "readme.md",
             "heartbeat-status-update.md",
@@ -275,7 +268,7 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           id: "no-change-duplicates",
           label: "No-change duplicate-section proof",
           kind: "worker",
-          prompt: "Inspect these three files and tell me whether any safe duplicate section can be removed without editing anything yet. Name all three inspected files in the conclusion: \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\", \"E:\\AI\\claw\\observer-output\\heartbeat-status-update.md\", \"E:\\AI\\claw\\observer-output\\intake-immediate-regression-checklist.md\"",
+          prompt: "Inspect these three files and tell me whether any safe duplicate section can be removed without editing anything yet. Name all three inspected files in the conclusion: \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\", \"E:\\AI\\derpy-claw\\observer-output\\heartbeat-status-update.md\", \"E:\\AI\\derpy-claw\\observer-output\\intake-immediate-regression-checklist.md\"",
           expectedNamedTargets: [
             "readme.md",
             "heartbeat-status-update.md",
@@ -286,7 +279,7 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           id: "status-note",
           label: "Status note output",
           kind: "worker",
-          prompt: "Read \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\" and produce a one-paragraph status note in \"E:\\AI\\claw\\observer-output\\worker-regression\\status-note.md\". The completion message must mention the file written.",
+          prompt: "Read \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\" and produce a one-paragraph status note in \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\status-note.md\". The completion message must mention the file written.",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "status-note.md"),
           expectedSummaryIncludes: [
             "status-note.md"
@@ -296,7 +289,7 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           id: "completed-today-template",
           label: "Completed-today template",
           kind: "worker",
-          prompt: "Create \"E:\\AI\\claw\\observer-output\\worker-regression\\completed-today-template.md\" with a short reusable template for reporting completed work today.",
+          prompt: "Create \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\completed-today-template.md\" with a short reusable template for reporting completed work today.",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "completed-today-template.md"),
           expectedSummaryIncludes: [
             "completed-today-template.md"
@@ -367,208 +360,11 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           id: "worker-regression-index",
           label: "Worker regression index",
           kind: "worker",
-          prompt: "Inspect \"E:\\AI\\claw\\observer-output\\worker-regression\" and write an index file called \"E:\\AI\\claw\\observer-output\\worker-regression\\index.md\" listing the files you found.",
+          prompt: "Inspect \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\" and write an index file called \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\index.md\" listing the files you found.",
           expectedOutputPath: path.join(outputRoot, "worker-regression", "index.md"),
           expectedSummaryIncludes: [
             "index.md"
           ]
-        }
-      ]
-    },
-    {
-      id: "mail-trust",
-      label: "Mail Trust",
-      description: "Verify email command trust routing keeps known senders in acknowledgement-only mode and trusted senders queue commands.",
-      cases: [
-        {
-          id: "known-command-safe-reply",
-          label: "Known sender gets safe reply only",
-          kind: "internal",
-          mode: "mail_command_trust",
-          message: {
-            subject: "Nova: send me the latest status",
-            sourceIdentity: {
-              kind: "email",
-              label: "Known Sender",
-              email: "known@example.com",
-              trustLevel: "known"
-            },
-            triage: {
-              likelySpam: false,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "safe_reply_only",
-            text: "send me the latest status",
-            reasonIncludes: "Known sources may receive a non-confidential acknowledgement"
-          }
-        },
-        {
-          id: "unknown-command-user-decision",
-          label: "Unknown sender is routed to user decision",
-          kind: "internal",
-          mode: "mail_command_trust",
-          message: {
-            subject: "Nova: send me the latest status",
-            sourceIdentity: {
-              kind: "email",
-              label: "Unknown Sender",
-              email: "unknown@example.com",
-              trustLevel: "unknown"
-            },
-            triage: {
-              likelySpam: false,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "user_decision_required",
-            text: "send me the latest status",
-            reasonIncludes: "referred the request to the user decision system"
-          }
-        },
-        {
-          id: "trusted-command-auto-queue",
-          label: "Trusted sender auto-queues",
-          kind: "internal",
-          mode: "mail_command_trust",
-          message: {
-            subject: "Nova: inspect the queue and summarize blockers",
-            sourceIdentity: {
-              kind: "email",
-              label: "Trusted Sender",
-              email: "trusted@example.com",
-              trustLevel: "trusted"
-            },
-            triage: {
-              likelySpam: false,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "auto_queue",
-            text: "inspect the queue and summarize blockers",
-            reasonIncludes: "has full trust and may issue commands"
-          }
-        },
-        {
-          id: "trusted-command-reassessed-from-config",
-          label: "Trusted sender is re-resolved from current config",
-          kind: "internal",
-          mode: "mail_command_trust",
-          observerConfigPatch: {
-            app: {
-              trust: {
-                records: [
-                  {
-                    label: "Trusted Sender",
-                    email: "trusted@example.com",
-                    trustLevel: "trusted"
-                  }
-                ]
-              }
-            }
-          },
-          message: {
-            subject: "Nova: inspect the queue and summarize blockers",
-            fromName: "Trusted Sender",
-            fromAddress: "trusted@example.com",
-            sourceIdentity: {
-              kind: "email",
-              label: "Trusted Sender",
-              email: "trusted@example.com",
-              trustLevel: "unknown"
-            },
-            triage: {
-              likelySpam: false,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "auto_queue",
-            text: "inspect the queue and summarize blockers",
-            reasonIncludes: "has full trust and may issue commands"
-          }
-        },
-        {
-          id: "trusted-command-comma-prefix",
-          label: "Trusted sender command with comma prefix",
-          kind: "internal",
-          mode: "mail_command_trust",
-          message: {
-            subject: "Nova, inspect the queue and summarize blockers",
-            sourceIdentity: {
-              kind: "email",
-              label: "Trusted Sender",
-              email: "trusted@example.com",
-              trustLevel: "trusted"
-            },
-            triage: {
-              likelySpam: false,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "auto_queue",
-            text: "inspect the queue and summarize blockers",
-            reasonIncludes: "has full trust and may issue commands"
-          }
-        },
-        {
-          id: "trusted-command-hyphen-prefix",
-          label: "Trusted sender command with hyphen prefix",
-          kind: "internal",
-          mode: "mail_command_trust",
-          message: {
-            subject: "nova - inspect the queue and summarize blockers",
-            sourceIdentity: {
-              kind: "email",
-              label: "Trusted Sender",
-              email: "trusted@example.com",
-              trustLevel: "trusted"
-            },
-            triage: {
-              likelySpam: false,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "auto_queue",
-            text: "inspect the queue and summarize blockers",
-            reasonIncludes: "has full trust and may issue commands"
-          }
-        },
-        {
-          id: "trusted-spam-blocked",
-          label: "Trusted sender flagged as spam is blocked",
-          kind: "internal",
-          mode: "mail_command_trust",
-          message: {
-            subject: "Nova: open the latest invoice",
-            sourceIdentity: {
-              kind: "email",
-              label: "Trusted Sender",
-              email: "trusted@example.com",
-              trustLevel: "trusted"
-            },
-            triage: {
-              likelySpam: true,
-              likelyPhishing: false
-            }
-          },
-          expected: {
-            detected: true,
-            action: "blocked",
-            text: "open the latest invoice",
-            reasonIncludes: "flagged as spam or phishing"
-          }
         }
       ]
     },
@@ -705,99 +501,99 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           label: "Grounded summary read/write repeat repair",
           kind: "internal",
           mode: "tool_loop_repair",
-          prompt: "Read \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\" and write a concise project summary to \"E:\\AI\\claw\\observer-output\\worker-regression\\glumgame-summary.md\"",
+          prompt: "Read \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\" and write a concise project summary to \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\glumgame-summary.md\"",
           repeatedToolCalls: [
             {
               name: "read_file",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\GlumGame-project\\\\readme.md\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\GlumGame-project\\\\readme.md\"}"
             },
             {
               name: "write_file",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\worker-regression\\\\glumgame-summary.md\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\worker-regression\\\\glumgame-summary.md\"}"
             }
           ],
           inspectedTargets: [
-            "E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md"
+            "E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md"
           ],
           executedTools: [
             "read_file",
             "write_file"
           ],
           expectedFirstToolName: "read_document",
-          expectedFirstToolTarget: "E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md"
+          expectedFirstToolTarget: "E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md"
         },
         {
           id: "grounded-single-read-repeat-switches-tool",
           label: "Grounded single-read repeat switches tool",
           kind: "internal",
           mode: "tool_loop_repair",
-          prompt: "Read \"E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md\" and write a concise project summary to \"E:\\AI\\claw\\observer-output\\worker-regression\\glumgame-summary.md\"\n\nRetry note: the previous worker repeated the same tool plan without advancing the work.\nMove to a different concrete file, directory, or edit step instead of repeating the same inspection loop.",
+          prompt: "Read \"E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md\" and write a concise project summary to \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\glumgame-summary.md\"\n\nRetry note: the previous worker repeated the same tool plan without advancing the work.\nMove to a different concrete file, directory, or edit step instead of repeating the same inspection loop.",
           repeatedToolCalls: [
             {
               name: "read_document",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\GlumGame-project\\\\readme.md\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\GlumGame-project\\\\readme.md\"}"
             }
           ],
           inspectedTargets: [
-            "E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md"
+            "E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md"
           ],
           executedTools: [
             "read_document"
           ],
           expectedFirstToolName: "read_file",
-          expectedFirstToolTarget: "E:\\AI\\claw\\observer-output\\GlumGame-project\\readme.md"
+          expectedFirstToolTarget: "E:\\AI\\derpy-claw\\observer-output\\GlumGame-project\\readme.md"
         },
         {
           id: "grounded-compare-repeat-advances-second-source",
           label: "Grounded compare repeat advances second source",
           kind: "internal",
           mode: "tool_loop_repair",
-          prompt: "Compare \"E:\\AI\\claw\\observer-output\\heartbeat-status-update.md\" with \"E:\\AI\\claw\\observer-output\\intake-immediate-regression-checklist.md\" and write a short differences note to \"E:\\AI\\claw\\observer-output\\worker-regression\\heartbeat-vs-intake.md\"",
+          prompt: "Compare \"E:\\AI\\derpy-claw\\observer-output\\heartbeat-status-update.md\" with \"E:\\AI\\derpy-claw\\observer-output\\intake-immediate-regression-checklist.md\" and write a short differences note to \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\heartbeat-vs-intake.md\"",
           repeatedToolCalls: [
             {
               name: "read_document",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\heartbeat-status-update.md\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\heartbeat-status-update.md\"}"
             },
             {
               name: "write_file",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\worker-regression\\\\heartbeat-vs-intake.md\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\worker-regression\\\\heartbeat-vs-intake.md\"}"
             }
           ],
           inspectedTargets: [
-            "E:\\AI\\claw\\observer-output\\heartbeat-status-update.md"
+            "E:\\AI\\derpy-claw\\observer-output\\heartbeat-status-update.md"
           ],
           executedTools: [
             "read_document",
             "write_file"
           ],
           expectedFirstToolName: "read_document",
-          expectedFirstToolTarget: "E:\\AI\\claw\\observer-output\\intake-immediate-regression-checklist.md"
+          expectedFirstToolTarget: "E:\\AI\\derpy-claw\\observer-output\\intake-immediate-regression-checklist.md"
         },
         {
           id: "grounded-directory-index-repeat-expands-listing",
           label: "Grounded directory index repeat expands listing",
           kind: "internal",
           mode: "tool_loop_repair",
-          prompt: "Inspect \"E:\\AI\\claw\\observer-output\\worker-regression\" and write an index file called \"E:\\AI\\claw\\observer-output\\worker-regression\\index.md\" listing the files you found.",
+          prompt: "Inspect \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\" and write an index file called \"E:\\AI\\derpy-claw\\observer-output\\worker-regression\\index.md\" listing the files you found.",
           repeatedToolCalls: [
             {
               name: "list_files",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\worker-regression\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\worker-regression\"}"
             },
             {
               name: "write_file",
-              arguments: "{\"path\":\"E:\\\\AI\\\\claw\\\\observer-output\\\\worker-regression\\\\index.md\"}"
+              arguments: "{\"path\":\"E:\\\\AI\\\\derpy-claw\\\\observer-output\\\\worker-regression\\\\index.md\"}"
             }
           ],
           inspectedTargets: [
-            "E:\\AI\\claw\\observer-output\\worker-regression"
+            "E:\\AI\\derpy-claw\\observer-output\\worker-regression"
           ],
           executedTools: [
             "list_files",
             "write_file"
           ],
           expectedFirstToolName: "list_files",
-          expectedFirstToolTarget: "E:\\AI\\claw\\observer-output\\worker-regression"
+          expectedFirstToolTarget: "E:\\AI\\derpy-claw\\observer-output\\worker-regression"
         }
       ]
     },
@@ -880,6 +676,22 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           mode: "failure_classification",
           failureText: "worker kept using tools without concrete progress across 3 consecutive steps: 9 transport-ok tool calls, 7 semantically successful, 4 inspection-only steps, 0 workspace writes, 0 artifact outputs, 0 capability requests.",
           expectedClassification: "low_value_tool_loop"
+        },
+        {
+          id: "classify-project-missing-concrete-change",
+          label: "Classify project missing concrete change failure",
+          kind: "internal",
+          mode: "failure_classification",
+          failureText: "worker attempted project-cycle finalization before satisfying completion policy: no concrete project file change was recorded",
+          expectedClassification: "project_missing_concrete_change"
+        },
+        {
+          id: "classify-project-missing-todo-update",
+          label: "Classify project missing todo update failure",
+          kind: "internal",
+          mode: "failure_classification",
+          failureText: "worker attempted project-cycle finalization before satisfying completion policy: PROJECT-TODO.md was not updated",
+          expectedClassification: "project_missing_todo_update"
         },
         {
           id: "repair-json-envelope-missing-arguments-brace",
@@ -1003,6 +815,7 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
             opportunityScanRetentionMs: 0,
             opportunityScanMaxQueuedBacklog: 0,
             noChangeMinimumConcreteTargets: 99,
+            creativeThroughputMode: "warp",
             autoImportProjects: false
           },
           expected: {
@@ -1013,7 +826,23 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
             opportunityScanRetentionMs: 3600000,
             opportunityScanMaxQueuedBacklog: 1,
             noChangeMinimumConcreteTargets: 6,
+            creativeThroughputMode: "auto",
             autoImportProjects: false
+          }
+        },
+        {
+          id: "retry-meta-preserves-creative-throughput-flags",
+          label: "Retry metadata preserves creative throughput flags",
+          kind: "internal",
+          mode: "retry_meta",
+          task: {
+            creativeThroughputMode: "auto",
+            preferHigherThroughputCreativeLane: true,
+            skipCreativeHandoff: true,
+            projectWorkPrimaryTarget: "Act-II-Draft.md",
+            projectWorkSecondaryTarget: "Act-I-Draft.md",
+            projectWorkTertiaryTarget: "characters/hierarchy-profiles.md",
+            projectWorkExpectedFirstMove: "Read /home/openclaw/.observer-sandbox/workspace/projects/ScifiNovel/Act-II-Draft.md before deciding on further edits."
           }
         },
         {
@@ -1061,6 +890,49 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
             sessionId: "local-worker-regression",
             forceToolUse: true,
             message: "Edit \"observer-output/worker-regression/edit-canary.md\" by replacing \"Status: TODO\" with \"Status: DONE\" and replacing \"Owner: unassigned\" with \"Owner: worker\". Keep the rest of the file unchanged and mention the edited file in the completion message."
+          },
+          expectedBypass: true
+        },
+        {
+          id: "worker-preflight-bypasses-article-keyword-brief",
+          label: "Worker preflight bypasses structured content brief",
+          kind: "internal",
+          mode: "worker_preflight_bypass",
+          task: {
+            sessionId: "Main",
+            forceToolUse: false,
+            message: [
+              "Please write an article on exampleresort for each of these keywords:",
+              "example resort",
+              "example resort beach town",
+              "boat hire beach town",
+              "map of example island",
+              "local slang guide",
+              "slang for awesome",
+              "travel destination",
+              "local word for excellent",
+              "local slang",
+              "local slang meaning"
+            ].join("\n")
+          },
+          expectedBypass: true
+        },
+        {
+          id: "worker-preflight-bypasses-marketing-brief-with-constraints",
+          label: "Worker preflight bypasses marketing brief with constraints",
+          kind: "internal",
+          mode: "worker_preflight_bypass",
+          task: {
+            sessionId: "Main",
+            forceToolUse: false,
+            message: [
+              "Create 8 ad headlines for a solar installer using these themes:",
+              "lower power bills",
+              "battery-ready homes",
+              "trusted local team",
+              "fast installation",
+              "25 year warranty"
+            ].join("\n")
           },
           expectedBypass: true
         },
@@ -1126,6 +998,50 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           }
         },
         {
+          id: "tool-path-rejects-control-characters",
+          label: "Tool path resolution rejects pasted document bodies",
+          kind: "internal",
+          mode: "tool_path_resolution",
+          path: "PROJECT-TODO.md\n---\n# Project TODO\n- [ ] Keep this aligned.",
+          expectedErrorIncludes: "control characters"
+        },
+        {
+          id: "tool-path-rejects-parent-traversal",
+          label: "Tool path resolution rejects parent traversal",
+          kind: "internal",
+          mode: "tool_path_resolution",
+          path: "../outside.md",
+          expectedErrorIncludes: "escapes the allowed container workspace"
+        },
+        {
+          id: "tool-content-guardrail-rejects-empty-write",
+          label: "Whole-file content guardrail rejects empty writes",
+          kind: "internal",
+          mode: "tool_content_guardrail",
+          toolName: "write_file",
+          content: "",
+          expectedErrorIncludes: "write_file content must be non-empty"
+        },
+        {
+          id: "tool-content-guardrail-rejects-empty-full-edit",
+          label: "Whole-file content guardrail rejects empty edit rewrites",
+          kind: "internal",
+          mode: "tool_content_guardrail",
+          toolName: "edit_file",
+          content: "   \n",
+          expectedErrorIncludes: "edit_file content must be non-empty"
+        },
+        {
+          id: "tool-content-guardrail-decodes-escaped-newline-markdown",
+          label: "Whole-file content guardrail decodes escaped newline markdown payloads",
+          kind: "internal",
+          mode: "tool_content_guardrail",
+          toolName: "write_file",
+          content: "# Project TODO\\n\\n## Active Tasks\\n- [ ] Check this box.",
+          expectedContent: "# Project TODO\n\n## Active Tasks\n- [ ] Check this box.",
+          targetPath: "/home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md"
+        },
+        {
           id: "project-repeated-tool-retry-narrows-to-primary-target",
           label: "Repeated-tool retry narrows to the primary target",
           kind: "internal",
@@ -1154,6 +1070,22 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           message: "Advance the project smart-forms-pro-0.4.0-src in /home/openclaw/.observer-sandbox/workspace/smart-forms-pro-0.4.0-src.\nThis is a focused project work package, not a full project sweep.\nObjective: Make one concrete improvement that advances the project meaningfully.\nInspect first: /home/openclaw/.observer-sandbox/workspace/smart-forms-pro-0.4.0-src/assets/js/admin-builder.js",
           finalText: "No change is possible for this objective. Inspected the following paths: /home/openclaw/.observer-sandbox/workspace/smart-forms-pro-0.4.0-src/assets/js/admin-builder.js, /home/openclaw/.observer-sandbox/workspace/smart-forms-pro-0.4.0-src/assets/css/admin.css, /home/openclaw/.observer-sandbox/workspace/smart-forms-pro-0.4.0-src/assets/css/frontend.css.",
           expectedReject: true
+        },
+        {
+          id: "project-missing-todo-retry-message-points-to-tracking-files",
+          label: "Project missing todo retry message points to tracking files",
+          kind: "internal",
+          mode: "project_retry_message",
+          task: {
+            message: "Advance the project simple-check-project in /home/openclaw/.observer-sandbox/workspace/simple-check-project.\nThis is a focused project work package, not a full project sweep.\nObjective: Complete the unchecked directive item in directive.md: Check this box.\nProject root: /home/openclaw/.observer-sandbox/workspace/simple-check-project.\nInspect first: /home/openclaw/.observer-sandbox/workspace/simple-check-project/directive.md",
+            projectPath: "/home/openclaw/.observer-sandbox/workspace/simple-check-project",
+            projectWorkPrimaryTarget: "directive.md"
+          },
+          failureClassification: "project_missing_todo_update",
+          expectedIncludes: [
+            "Retry note: the previous worker made progress but did not update PROJECT-TODO.md before finishing.",
+            "Update /home/openclaw/.observer-sandbox/workspace/simple-check-project/PROJECT-TODO.md to check off the completed objective or rewrite it to reflect the remaining work."
+          ]
         },
         {
           id: "project-cycle-specialty-creative-manuscript",
@@ -1214,6 +1146,35 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           },
           focus: "Create a concise README.md for ScifiNovel covering purpose, setup, and current status.",
           expectedSpecialty: "document"
+        },
+        {
+          id: "project-cycle-specialty-science-research",
+          label: "Project-cycle science research work routes to retrieval specialty",
+          kind: "internal",
+          mode: "project_cycle_specialty",
+          project: {
+            name: "Molecular Pathways",
+            path: "/home/openclaw/.observer-sandbox/workspace/Molecular Pathways"
+          },
+          todoState: {
+            inspection: {
+              files: [
+                "directive.md",
+                "RESEARCH-BRIEF.md",
+                "PROJECT-TODO.md"
+              ],
+              directories: [
+                "research-notes"
+              ],
+              hasReadme: false,
+              hasPackageJson: false,
+              hasSource: false,
+              hasTests: false,
+              hasTodoMarkers: false
+            }
+          },
+          focus: "Design a scientific research brief on metabolic pathways with cited sources and confidence levels.",
+          expectedSpecialty: "retrieval"
         },
         {
           id: "project-directive-seed-creative-project",
@@ -1330,6 +1291,91 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           unexpectedIncludes: [
             "- Front-End Developer:",
             "- Back-End Developer:",
+            "- Digital Marketer:"
+          ]
+        },
+        {
+          id: "project-role-board-seed-frontend-scoping-defers-late-pass-roles",
+          label: "Early front-end projects stay in scoping instead of jumping to accessibility passes",
+          kind: "internal",
+          mode: "project_role_board_seed",
+          project: {
+            name: "UIWorkbench",
+            path: "/home/openclaw/.observer-sandbox/workspace/UIWorkbench"
+          },
+          inspection: {
+            files: [
+              "src/main.js",
+              "src/app.css",
+              "public/index.html"
+            ],
+            directories: [
+              "src",
+              "public"
+            ],
+            hasReadme: false,
+            hasPackageJson: false,
+            hasSource: true,
+            hasTests: false,
+            hasTodoMarkers: false
+          },
+          directiveState: {
+            authoritative: false,
+            uncheckedItems: [],
+            checkedItems: []
+          },
+          expectedIncludes: [
+            "## Assessment Snapshot",
+            "- Project Manager:",
+            "- Product Manager:",
+            "- Technical Architect / Solutions Architect:"
+          ],
+          unexpectedIncludes: [
+            "- Front-End Developer:",
+            "- Accessibility Specialist:",
+            "- SEO Specialist:"
+          ]
+        },
+        {
+          id: "project-role-board-seed-frontend-quality-enables-accessibility",
+          label: "Mature front-end projects can activate accessibility during quality passes",
+          kind: "internal",
+          mode: "project_role_board_seed",
+          project: {
+            name: "UIWorkbench",
+            path: "/home/openclaw/.observer-sandbox/workspace/UIWorkbench"
+          },
+          inspection: {
+            files: [
+              "README.md",
+              "package.json",
+              "src/main.js",
+              "src/app.css",
+              "public/index.html",
+              "tests/app.test.js"
+            ],
+            directories: [
+              "src",
+              "public",
+              "tests"
+            ],
+            hasReadme: true,
+            hasPackageJson: true,
+            hasSource: true,
+            hasTests: true,
+            hasTodoMarkers: false
+          },
+          directiveState: {
+            authoritative: false,
+            uncheckedItems: [],
+            checkedItems: []
+          },
+          expectedIncludes: [
+            "## Assessment Snapshot",
+            "- QA Tester:",
+            "- Accessibility Specialist:"
+          ],
+          unexpectedIncludes: [
             "- Digital Marketer:"
           ]
         },
@@ -1451,6 +1497,33 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           ]
         },
         {
+          id: "project-todo-state-recovers-legacy-priority-and-followups",
+          label: "Legacy todo parsing recovers priority and follow-up items",
+          kind: "internal",
+          mode: "project_todo_state",
+          todoContent: [
+            "# Project TODO",
+            "",
+            "## Current Priority",
+            "1. **Draft Opening Scene (Shippable Content)**: Write the first chapter where the protagonist attempts to channel land-tied magic without a stable soul anchor, triggering the void's corruption while relying on unstable wind energy.",
+            "",
+            "## Follow-up Tasks",
+            "- Refine magic system descriptions in 02-MagicSystem.md based on narrative usage.",
+            "- Expand world foundation details in 01-WORLD-FOUNDATION.md as needed for the opening scene.",
+            "- Begin drafting 03-SorceressEscapes.md with the defined plot points."
+          ].join("\\n"),
+          expectedUncheckedCount: 4,
+          expectedCheckedCount: 0,
+          expectedUncheckedIncludes: [
+            "**Draft Opening Scene (Shippable Content)**: Write the first chapter where the protagonist attempts to channel land-tied magic without a stable soul anchor, triggering the void's corruption while relying on unstable wind energy.",
+            "Refine magic system descriptions in 02-MagicSystem.md based on narrative usage."
+          ],
+          expectedNormalizedIncludes: [
+            "- [ ] **Draft Opening Scene (Shippable Content)**: Write the first chapter where the protagonist attempts to channel land-tied magic without a stable soul anchor, triggering the void's corruption while relying on unstable wind energy.",
+            "- [ ] Refine magic system descriptions in 02-MagicSystem.md based on narrative usage."
+          ]
+        },
+        {
           id: "project-work-packages-prioritize-directive",
           label: "Project work packages prioritize directive tasks over role side quests",
           kind: "internal",
@@ -1536,6 +1609,99 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           expectedCount: 1,
           expectedFocuses: [
             "Review the project structure and identify the best runnable or shippable next step required for export, then record the exact export blocker or missing completion evidence in PROJECT-TODO.md and PROJECT-ROLE-TASKS.md."
+          ]
+        },
+        {
+          id: "project-work-packages-ignore-inactive-late-pass-roles",
+          label: "Project work packages ignore inactive late-pass roles while active roles stay in focus",
+          kind: "internal",
+          mode: "project_work_packages",
+          project: {
+            name: "UIWorkbench",
+            path: "/home/openclaw/.observer-sandbox/workspace/UIWorkbench"
+          },
+          todoState: {
+            inspection: {
+              files: [
+                "README.md",
+                "src/main.js",
+                "src/app.css",
+                "public/index.html"
+              ],
+              directories: [
+                "src",
+                "public"
+              ],
+              hasReadme: true,
+              hasPackageJson: false,
+              hasSource: true,
+              hasTests: false,
+              hasTodoMarkers: false
+            },
+            unchecked: [],
+            roleUnchecked: [],
+            activeRoles: [
+              {
+                name: "Project Manager",
+                reason: "Turn the current project scan into one concrete next action tied to src/main.js."
+              },
+              {
+                name: "Front-End Developer",
+                reason: "Inspect src/main.js for the most concrete UI or interaction improvement that can be shipped safely."
+              }
+            ],
+            roleReports: [
+              {
+                name: "Project Manager",
+                selected: true,
+                status: "active",
+                playbook: "Look for blocked tasks, sequencing problems, stale TODOs, missing next actions, or work that should be broken into a concrete next step.",
+                unchecked: [
+                  "Turn the current project scan into one concrete next action tied to src/main.js."
+                ],
+                checked: [],
+                recommended: [
+                  "Turn the current project scan into one concrete next action tied to src/main.js."
+                ],
+                reason: "Turn the current project scan into one concrete next action tied to src/main.js."
+              },
+              {
+                name: "Front-End Developer",
+                selected: true,
+                status: "active",
+                playbook: "Look for concrete UI implementation work, TODO/FIXME markers, broken interactions, styling issues, or missing pages/components.",
+                unchecked: [
+                  "Inspect src/main.js for the most concrete UI or interaction improvement that can be shipped safely."
+                ],
+                checked: [],
+                recommended: [
+                  "Inspect src/main.js for the most concrete UI or interaction improvement that can be shipped safely."
+                ],
+                reason: "Inspect src/main.js for the most concrete UI or interaction improvement that can be shipped safely."
+              },
+              {
+                name: "Accessibility Specialist",
+                selected: false,
+                status: "planned",
+                playbook: "Look for accessibility fixes, semantic gaps, missing labels, contrast issues, keyboard flow issues, or documentation that implies compliance risk.",
+                unchecked: [
+                  "Check src/app.css for styling choices that could affect readability, focus states, or contrast."
+                ],
+                checked: [],
+                recommended: [
+                  "Check src/app.css for styling choices that could affect readability, focus states, or contrast."
+                ],
+                reason: "Check src/app.css for styling choices that could affect readability, focus states, or contrast."
+              }
+            ]
+          },
+          expectedCount: 2,
+          expectedFocuses: [
+            "Turn the current project scan into one concrete next action tied to src/main.js.",
+            "Inspect src/main.js for the most concrete UI or interaction improvement that can be shipped safely."
+          ],
+          unexpectedFocuses: [
+            "Check src/app.css for styling choices that could affect readability, focus states, or contrast."
           ]
         },
         {
@@ -2130,6 +2296,49 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           ]
         },
         {
+          id: "project-cycle-completion-policy-allows-planning-doc-pass",
+          label: "Project-cycle completion policy allows planning-doc-only pass when objective says so",
+          kind: "internal",
+          mode: "project_cycle_completion_policy",
+          message: "Advance the project simple-check-project in /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nThis is a focused project work package, not a full project sweep.\nObjective: Review the project structure and identify the best runnable or shippable next step required for export, then record the exact export blocker or missing completion evidence in PROJECT-TODO.md and PROJECT-ROLE-TASKS.md.\nProject root: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nInspect first: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md before deciding on further edits.",
+          finalText: "I reviewed the project state and recorded the export blocker in PROJECT-TODO.md and PROJECT-ROLE-TASKS.md.",
+          inspectedTargets: [
+            "/home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md",
+            "/home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-ROLE-TASKS.md"
+          ],
+          successfulToolNames: [
+            "read_document",
+            "edit_file",
+            "edit_file"
+          ],
+          changedWorkspaceFiles: [
+            { containerPath: "/home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md" },
+            { containerPath: "/home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-ROLE-TASKS.md" }
+          ],
+          expectedEligibleForCompletion: true,
+          unexpectedBlockingCodes: [
+            "missing_concrete_project_change",
+            "documentation_only_objective_mismatch",
+            "missing_project_todo_update"
+          ]
+        },
+        {
+          id: "project-cycle-waiting-policy-rejects-question-before-concrete-outcome",
+          label: "Project-cycle waiting policy rejects user questions that bypass concrete completion",
+          kind: "internal",
+          mode: "project_cycle_waiting_policy",
+          message: "Advance the project Fantasy Novel in /home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel.\nThis is a focused project work package, not a full project sweep.\nObjective: Identify next chapter beat or finalize current scene if no further beats remain.\nProject root: /home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel.\nInspect first: /home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel/04-MAIN-MANUSCRIPT.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel/04-MAIN-MANUSCRIPT.md before deciding on further edits.",
+          finalText: "QUESTION FOR USER: Do you have a draft of the manuscript content I should load into 04-MAIN-MANUSCRIPT.md, or should I generate a new chapter?",
+          waitingForUser: true,
+          inspectedTargets: [
+            "/home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel/04-MAIN-MANUSCRIPT.md"
+          ],
+          successfulToolNames: [
+            "read_document"
+          ],
+          expectedReject: true
+        },
+        {
           id: "project-cycle-worker-prompt-allows-planning-doc-outcome-for-next-step-objective",
           label: "Project-cycle worker prompt allows TODO updates for next-step objectives",
           kind: "internal",
@@ -2162,6 +2371,50 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
               specialty: "code"
             },
             message: "Advance the project simple-check-project in /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nThis is a focused project work package, not a full project sweep.\nObjective: Review the project structure and identify the best runnable or shippable next step required for export, then record the exact export blocker or missing completion evidence in PROJECT-TODO.md and PROJECT-ROLE-TASKS.md.\nProject root: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nInspect first: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/directive.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/directive.md before deciding on further edits.",
+            forceToolUse: true,
+            preset: "queued-task"
+          },
+          mustInclude: [
+            "updating PROJECT-TODO.md and PROJECT-ROLE-TASKS.md with an evidence-backed next action counts as valid concrete progress for that pass",
+            "do not stop at a recommendation in final_text alone"
+          ],
+          mustNotInclude: [
+            "do not edit PROJECT-TODO.md or PROJECT-ROLE-TASKS.md until after you have already changed a real implementation file"
+          ]
+        },
+        {
+          id: "project-cycle-worker-prompt-allows-planning-doc-outcome-for-todo-maintenance",
+          label: "Project-cycle worker prompt allows TODO maintenance objectives to update planning docs",
+          kind: "internal",
+          mode: "worker_specialty_prompt_lines",
+          input: {
+            brain: {
+              kind: "worker",
+              specialty: "code"
+            },
+            message: "Advance the project simple-check-project in /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nThis is a focused project work package, not a full project sweep.\nObjective: Update this todo file after each work pass by checking off completed items and adding any newly discovered follow-up tasks.\nProject root: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nInspect first: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/directive.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/directive.md before deciding on further edits.",
+            forceToolUse: true,
+            preset: "queued-task"
+          },
+          mustInclude: [
+            "updating PROJECT-TODO.md and PROJECT-ROLE-TASKS.md with an evidence-backed next action counts as valid concrete progress for that pass",
+            "do not stop at a recommendation in final_text alone"
+          ],
+          mustNotInclude: [
+            "do not edit PROJECT-TODO.md or PROJECT-ROLE-TASKS.md until after you have already changed a real implementation file"
+          ]
+        },
+        {
+          id: "project-cycle-worker-prompt-allows-planning-doc-outcome-for-planning-alignment",
+          label: "Project-cycle worker prompt allows planning alignment objectives to update planning docs",
+          kind: "internal",
+          mode: "worker_specialty_prompt_lines",
+          input: {
+            brain: {
+              kind: "worker",
+              specialty: "code"
+            },
+            message: "Advance the project simple-check-project in /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nThis is a focused project work package, not a full project sweep.\nObjective: Keep PROJECT-TODO.md and PROJECT-ROLE-TASKS.md aligned for simple-check-project after each concrete work pass.\nProject root: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project.\nInspect first: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/directive.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/projects/simple-check-project/directive.md before deciding on further edits.",
             forceToolUse: true,
             preset: "queued-task"
           },
@@ -2232,6 +2485,26 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           ]
         },
         {
+          id: "project-cycle-worker-prompt-guides-science-research-safety",
+          label: "Project-cycle retrieval prompt adds evidence and science safety guidance",
+          kind: "internal",
+          mode: "worker_specialty_prompt_lines",
+          input: {
+            brain: {
+              kind: "worker",
+              specialty: "retrieval"
+            },
+            message: "Advance the project Molecular Pathways in /home/openclaw/.observer-sandbox/workspace/Molecular Pathways.\nThis is a focused project work package, not a full project sweep.\nObjective: Design a scientific research brief on metabolic pathways with cited sources and confidence levels.\nProject root: /home/openclaw/.observer-sandbox/workspace/Molecular Pathways.\nInspect first: /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/directive.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/directive.md before deciding on further edits.",
+            forceToolUse: true,
+            preset: "queued-task"
+          },
+          mustInclude: [
+            "You are a retrieval-oriented worker.",
+            "For scientific research tasks, prefer peer-reviewed or primary references when possible and clearly label evidence gaps.",
+            "For bio/chemical pathway or optimization requests, stay high-level and do not provide actionable wet-lab procedures, parameter tuning, or acquisition guidance."
+          ]
+        },
+        {
           id: "project-cycle-queued-prompt-summarizes-capabilities",
           label: "Project-cycle queued prompt summarizes predicted capabilities",
           kind: "internal",
@@ -2243,6 +2516,20 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           taskPrompt: "Advance the project check-this-box-zipped in /home/openclaw/.observer-sandbox/workspace/check-this-box-zipped.\nThis is a focused project work package, not a full project sweep.\nObjective: Inspect check-this-box-zipped.zip and unzip it into the workspace so the real project files are available for concrete work.\nProject root: /home/openclaw/.observer-sandbox/workspace/check-this-box-zipped.\nInspect first: /home/openclaw/.observer-sandbox/workspace/check-this-box-zipped/check-this-box-zipped.zip\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/check-this-box-zipped/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/check-this-box-zipped/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/check-this-box-zipped/check-this-box-zipped.zip before deciding on further edits.",
           mustInclude: [
             "Predicted capability focus: Archive extraction via unzip; Repo inspection via list_files; File editing via edit_file; Shell validation via shell_command."
+          ]
+        },
+        {
+          id: "project-cycle-queued-prompt-includes-evidence-synthesis-capability",
+          label: "Project-cycle queued prompt includes evidence-synthesis capability for science work",
+          kind: "internal",
+          mode: "queued_task_execution_prompt",
+          task: {
+            sessionId: "project-cycle",
+            internalJobType: "project_cycle"
+          },
+          taskPrompt: "Advance the project Molecular Pathways in /home/openclaw/.observer-sandbox/workspace/Molecular Pathways.\nThis is a focused project work package, not a full project sweep.\nObjective: Design a scientific research brief on metabolic pathways with cited sources and confidence levels.\nProject root: /home/openclaw/.observer-sandbox/workspace/Molecular Pathways.\nInspect first: /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/directive.md\nRequired planning files: /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/PROJECT-TODO.md and /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/PROJECT-ROLE-TASKS.md.\nExpected first move: Read /home/openclaw/.observer-sandbox/workspace/Molecular Pathways/directive.md before deciding on further edits.",
+          mustInclude: [
+            "Evidence synthesis via read_document"
           ]
         },
         {

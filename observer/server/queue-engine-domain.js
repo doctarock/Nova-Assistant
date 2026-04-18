@@ -1,10 +1,72 @@
+function getTaskDisplayTimestamp(task = {}) {
+  return Number(task?.updatedAt || task?.completedAt || task?.startedAt || task?.createdAt || 0);
+}
+
+function sortTasksByDisplayTime(tasks = []) {
+  return [...tasks].sort((left, right) => getTaskDisplayTimestamp(right) - getTaskDisplayTimestamp(left));
+}
+
+function isEscalationReviewTask(task = {}) {
+  return String(task?.internalJobType || "").trim().toLowerCase() === "escalation_review";
+}
+
+function isRepairFollowUpTask(task = {}) {
+  if (isEscalationReviewTask(task)) {
+    return false;
+  }
+  return Boolean(String(task?.previousTaskId || "").trim())
+    || Boolean(String(task?.escalationParentTaskId || "").trim())
+    || Boolean(String(task?.reshapeSourcePhase || "").trim())
+    || Math.max(0, Number(task?.reshapeAttemptCount || 0)) > 0;
+}
+
+function buildRepairMonitor(tasks = {}) {
+  const queued = Array.isArray(tasks?.queued) ? tasks.queued : [];
+  const inProgress = Array.isArray(tasks?.inProgress) ? tasks.inProgress : [];
+  const done = Array.isArray(tasks?.done) ? tasks.done : [];
+  const failed = Array.isArray(tasks?.failed) ? tasks.failed : [];
+
+  const activeFollowUps = sortTasksByDisplayTime([...queued, ...inProgress].filter(isRepairFollowUpTask));
+  const reviewJobs = sortTasksByDisplayTime([...queued, ...inProgress, ...done, ...failed].filter(isEscalationReviewTask));
+  const recentOutcomes = sortTasksByDisplayTime([...done, ...failed].filter(isRepairFollowUpTask));
+
+  return {
+    active: activeFollowUps.slice(0, 12),
+    reviews: reviewJobs.slice(0, 12),
+    recent: recentOutcomes.slice(0, 12),
+    summary: {
+      activeFollowUpCount: activeFollowUps.length,
+      activeReviewCount: [...queued, ...inProgress].filter(isEscalationReviewTask).length,
+      reviewCount: reviewJobs.length,
+      recentOutcomeCount: recentOutcomes.length,
+      totalVisible: activeFollowUps.length + reviewJobs.length + recentOutcomes.length
+    }
+  };
+}
+
+function buildTaskQueuePresentation(tasks = {}) {
+  const queued = Array.isArray(tasks?.queued) ? tasks.queued : [];
+  const inProgress = Array.isArray(tasks?.inProgress) ? tasks.inProgress : [];
+  const done = Array.isArray(tasks?.done) ? tasks.done : [];
+  const failed = Array.isArray(tasks?.failed) ? tasks.failed : [];
+
+  return {
+    ...tasks,
+    queued: queued.filter((task) => !isEscalationReviewTask(task)),
+    inProgress: inProgress.filter((task) => !isEscalationReviewTask(task)),
+    done: done.filter((task) => !isEscalationReviewTask(task)),
+    failed: failed.filter((task) => !isEscalationReviewTask(task)),
+    repairMonitor: buildRepairMonitor(tasks)
+  };
+}
+
 export function registerQueueEngineRoutes(context = {}) {
   const app = context.app;
 
   app.get("/api/tasks/list", async (req, res) => {
     try {
       const tasks = await context.listAllTasks();
-      res.json({ ok: true, root: context.taskQueueRoot, ...tasks });
+      res.json({ ok: true, root: context.taskQueueRoot, ...buildTaskQueuePresentation(tasks) });
     } catch (error) {
       res.status(500).json({ ok: false, error: error.message });
     }
@@ -62,6 +124,10 @@ export function registerQueueEngineRoutes(context = {}) {
     }
   });
 
+  const ENQUEUE_MAX_MESSAGE_LENGTH = 8000;
+  const ENQUEUE_MAX_ATTACHMENTS = 20;
+  const ENQUEUE_MAX_PLANNED_TASKS = 50;
+
   app.post("/api/tasks/enqueue", async (req, res) => {
     const originalMessage = context.normalizeUserRequest(req.body?.message);
     const sessionId = String(req.body?.sessionId || "Main").trim();
@@ -84,6 +150,15 @@ export function registerQueueEngineRoutes(context = {}) {
 
     if (!message) {
       return res.status(400).json({ ok: false, error: "message is required" });
+    }
+    if (message.length > ENQUEUE_MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({ ok: false, error: `message must not exceed ${ENQUEUE_MAX_MESSAGE_LENGTH} characters` });
+    }
+    if (attachments.length > ENQUEUE_MAX_ATTACHMENTS) {
+      return res.status(400).json({ ok: false, error: `attachments must not exceed ${ENQUEUE_MAX_ATTACHMENTS} items` });
+    }
+    if (plannedTasks.length > ENQUEUE_MAX_PLANNED_TASKS) {
+      return res.status(400).json({ ok: false, error: `plannedTasks must not exceed ${ENQUEUE_MAX_PLANNED_TASKS} items` });
     }
     context.noteInteractiveActivity();
 
@@ -288,6 +363,59 @@ export function registerQueueEngineRoutes(context = {}) {
       res.json({ ok: true, task });
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/tasks/dead", async (req, res) => {
+    try {
+      const tasks = await context.listAllTasks();
+      const dead = Array.isArray(tasks?.failed) ? tasks.failed : [];
+      res.json({ ok: true, dead, count: dead.length });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/tasks/dead/requeue", async (req, res) => {
+    const taskId = String(req.body?.taskId || "").trim();
+    const reason = String(req.body?.reason || "Requeued from dead letter queue by user.").trim();
+    if (!taskId) {
+      return res.status(400).json({ ok: false, error: "taskId is required" });
+    }
+    try {
+      const task = await context.findTaskById(taskId);
+      if (!task) {
+        return res.status(404).json({ ok: false, error: "task not found" });
+      }
+      if (String(task.status || "").toLowerCase() !== "failed") {
+        return res.status(400).json({
+          ok: false,
+          error: `task status is "${task.status}", expected "failed"`,
+          code: "not_dead"
+        });
+      }
+      const now = Date.now();
+      const requeuedTask = await context.persistTaskTransition({
+        previousTask: task,
+        nextTask: {
+          ...task,
+          status: "queued",
+          updatedAt: now,
+          completedAt: null,
+          startedAt: null,
+          stalledAt: null,
+          resultSummary: null,
+          reshapeAttemptCount: 0,
+          dispatchCount: 0,
+          notes: `${reason} (requeued from dead letter at ${new Date(now).toISOString()})`
+        },
+        eventType: "task.requeued",
+        reason
+      });
+      context.broadcastObserverEvent({ type: "task.requeued", task: requeuedTask });
+      res.json({ ok: true, task: requeuedTask });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 

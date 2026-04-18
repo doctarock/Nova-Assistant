@@ -1,3 +1,6 @@
+# Claude Code local settings (contains machine-specific paths)
+.claude/settings.local.json
+
 # OS/editor cruft
 .DS_Store
 Thumbs.db
@@ -19,12 +22,11 @@ pnpm-debug.log*
 
 # Dependencies
 node_modules/
-openclaw-observer/node_modules/
+observer/node_modules/
 
 # Observer runtime/output
 observer-output/
-openclaw-observer/.observer-runtime/
-openclaw-observer/.observer-runtime/
+observer/.observer-runtime/
 observer-task-queue/
 **/observer-task-queue/
 
@@ -33,4 +35,4 @@ observer-task-queue/
 .tmp-live-*.md
 .tmp-task-*.json
 .tmp-cron-jobs*.json
-openclaw-observer/.tmp-run-*.log
+observer/.tmp-run-*.log

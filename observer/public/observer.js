@@ -3,30 +3,37 @@ const {
   activateTab,
   activateBrainSubtab,
   activateNovaSubtab,
-  activateProjectsSubtab,
   activateSecretsSubtab,
-  activateCalendarSubtab,
+  activatePluginsSubtab,
+  activateCapabilitiesSubtab,
+  activateSystemSubtab,
   activateQueueSubtab,
-  activateJobsSubtab,
   applyTabIcons,
   dispatchNextTask,
   enqueueTaskFromPrompt,
   enqueueUpdate,
   escapeHtml,
   formatCronObservation,
-  formatCalendarDateKey,
   formatDateTime,
   formatDurationMs,
   formatEntityRef,
   loadCronJobs,
   loadFile,
-  loadMailStatus,
   loadSecretsCatalog,
   loadBrainConfig,
-  loadPromptReview,
   loadNovaConfig,
-  loadCalendarEvents,
-  loadProjectConfig,
+  loadPluginManagerPanel,
+  installUploadedPluginPackage,
+  loadPluginPermissionRules,
+  savePluginPermissionRules,
+  loadPluginTaskLifecycleOutput,
+  waitForPluginTaskLifecycleTask,
+  createPluginLifecycleTask,
+  stopPluginLifecycleTask,
+  answerPluginLifecycleTask,
+  loadPluginSessionMemoryState,
+  capturePluginSessionMemoryTask,
+  loadPluginCronHardeningStatus,
   loadTaskReshapeIssues,
   loadRegressionSuites,
   loadToolConfig,
@@ -35,25 +42,18 @@ const {
   loadRuntimeOptions,
   loadTaskFiles,
   loadTaskQueue,
-  loadTodoList,
   loadTree,
   pollCronEvents,
   pollTaskEvents,
   pickLanguageVariant: pickLanguageVariantFromApp,
-  parseCalendarInputValue,
   queueAcknowledgement,
   readFileAsBase64,
   refreshStatus,
   resetToSimpleProjectState,
-  resetCalendarForm,
-  renderCalendarMonth,
-  pollMailInbox,
   replayWaitingQuestionThroughAvatar,
   saveAccessSettings,
-  sendMailMessage,
   saveToolConfig,
   saveNovaConfig,
-  saveProjectConfig,
   renderAttachmentList,
   renderHistory,
   renderPayloads,
@@ -65,7 +65,6 @@ const {
   showQueuedUpdate,
   speakAcknowledgement,
   stopPayloadSpeech,
-  updateCalendarFormState,
   triagePrompt,
   triagePromptLocally,
   updateAccessSummary,
@@ -256,7 +255,10 @@ const startAgentRun = async (messageOverride = "", options = {}) => {
       });
     }
 
-    const r = await fetch("/api/agent/run", {
+    const adminFetch = typeof observerApp.adminFetch === "function"
+      ? observerApp.adminFetch.bind(observerApp)
+      : fetch;
+    const r = await adminFetch("/api/agent/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -441,230 +443,6 @@ resumeQueueBtn.onclick = async () => {
   await setQueuePaused(false);
 };
 
-async function saveCalendarEventFromForm() {
-  const startAt = parseCalendarInputValue(calendarStartAtEl.value);
-  if (!startAt) {
-    throw new Error("Start date and time are required");
-  }
-  const payload = {
-    id: activeCalendarEventId || undefined,
-    title: calendarTitleEl.value,
-    type: calendarTypeEl.value,
-    startAt,
-    endAt: parseCalendarInputValue(calendarEndAtEl.value),
-    allDay: calendarAllDayEl.checked,
-    location: calendarLocationEl.value,
-    description: calendarDescriptionEl.value,
-    repeat: {
-      frequency: calendarRepeatFrequencyEl.value,
-      interval: Number(calendarRepeatIntervalEl.value || 1) || 1
-    },
-    action: {
-      enabled: calendarActionEnabledEl.checked || calendarTypeEl.value === "nova_action",
-      requestedBrainId: calendarActionBrainEl.value,
-      message: calendarActionMessageEl.value,
-      internetEnabled: true,
-      forceToolUse: true
-    }
-  };
-  const r = await fetch("/api/calendar/events", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const j = await r.json();
-  if (!r.ok || !j.ok) {
-    throw new Error(j.error || "calendar save failed");
-  }
-  activeCalendarEventId = String(j.event?.id || "");
-  calendarHintEl.textContent = j.message || "Calendar event saved.";
-  await loadCalendarEvents();
-}
-
-async function setCalendarEventState(status) {
-  if (!activeCalendarEventId) {
-    throw new Error("Select an event first");
-  }
-  const r = await fetch(`/api/calendar/events/${encodeURIComponent(activeCalendarEventId)}/state`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ status })
-  });
-  const j = await r.json();
-  if (!r.ok || !j.ok) {
-    throw new Error(j.error || `failed to mark event ${status}`);
-  }
-  calendarHintEl.textContent = j.message || `Calendar event marked ${status}.`;
-  await loadCalendarEvents();
-}
-
-calendarSaveBtn.onclick = async () => {
-  calendarSaveBtn.disabled = true;
-  calendarHintEl.textContent = "Saving event...";
-  try {
-    await saveCalendarEventFromForm();
-  } catch (error) {
-    calendarHintEl.textContent = error.message;
-  } finally {
-    calendarSaveBtn.disabled = false;
-  }
-};
-
-calendarCompleteBtn.onclick = async () => {
-  try {
-    await setCalendarEventState("completed");
-  } catch (error) {
-    calendarHintEl.textContent = error.message;
-  }
-};
-
-calendarCancelBtn.onclick = async () => {
-  try {
-    await setCalendarEventState("cancelled");
-  } catch (error) {
-    calendarHintEl.textContent = error.message;
-  }
-};
-
-calendarDeleteBtn.onclick = async () => {
-  if (!activeCalendarEventId) {
-    calendarHintEl.textContent = "Select an event first.";
-    return;
-  }
-  calendarDeleteBtn.disabled = true;
-  calendarHintEl.textContent = "Deleting event...";
-  try {
-    const r = await fetch(`/api/calendar/events/${encodeURIComponent(activeCalendarEventId)}`, {
-      method: "DELETE"
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "calendar delete failed");
-    }
-    calendarHintEl.textContent = j.message || "Calendar event deleted.";
-    resetCalendarForm();
-    await loadCalendarEvents();
-  } catch (error) {
-    calendarHintEl.textContent = error.message;
-  } finally {
-    calendarDeleteBtn.disabled = false;
-  }
-};
-
-calendarNewBtn.onclick = () => {
-  resetCalendarForm();
-  activateCalendarSubtab("calendarEditPanel");
-  calendarHintEl.textContent = "Creating a new event.";
-};
-
-calendarRefreshBtn.onclick = loadCalendarEvents;
-calendarTodayBtn.onclick = () => {
-  calendarMonthAnchorMs = Date.now();
-  calendarSelectedDayKey = formatCalendarDateKey(Date.now());
-  activateCalendarSubtab("calendarDailyPanel");
-  renderCalendarMonth();
-  resetCalendarForm();
-};
-calendarPrevBtn.onclick = () => {
-  const date = new Date(calendarMonthAnchorMs || Date.now());
-  calendarMonthAnchorMs = new Date(date.getFullYear(), date.getMonth() - 1, 1).getTime();
-  renderCalendarMonth();
-};
-calendarNextBtn.onclick = () => {
-  const date = new Date(calendarMonthAnchorMs || Date.now());
-  calendarMonthAnchorMs = new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
-  renderCalendarMonth();
-};
-calendarTypeEl.onchange = updateCalendarFormState;
-calendarActionEnabledEl.onchange = updateCalendarFormState;
-
-mailPollBtn.onclick = async () => {
-  mailPollBtn.disabled = true;
-  mailHintEl.textContent = "Polling mailbox...";
-  try {
-    const result = await pollMailInbox();
-    mailHintEl.textContent = result.count
-      ? `Found ${result.count} new ${result.count === 1 ? "message" : "messages"} since the last check.`
-      : "No new messages.";
-  } catch (error) {
-    mailHintEl.textContent = `Mail poll failed: ${error.message}`;
-  } finally {
-    await loadMailStatus();
-  }
-};
-
-mailSendBtn.onclick = async () => {
-  mailSendBtn.disabled = true;
-  mailHintEl.textContent = "Sending message...";
-  try {
-    await sendMailMessage();
-  } catch (error) {
-    mailHintEl.textContent = `Mail send failed: ${error.message}`;
-  } finally {
-    await loadMailStatus();
-  }
-};
-
-if (mailSummariesEnabledEl) {
-  mailSummariesEnabledEl.onchange = async () => {
-    const enabled = mailSummariesEnabledEl.checked;
-    mailSummariesEnabledEl.disabled = true;
-    mailHintEl.textContent = enabled ? "Enabling email summaries..." : "Disabling email summaries...";
-    try {
-      const r = await fetch("/api/mail/summary-setting", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled })
-      });
-      const j = await r.json();
-      if (!r.ok || j.ok === false) {
-        throw new Error(j.error || "mail summary setting update failed");
-      }
-      mailHintEl.textContent = enabled ? "Email summaries enabled." : "Email summaries disabled.";
-    } catch (error) {
-      mailSummariesEnabledEl.checked = !enabled;
-      mailHintEl.textContent = `Mail summary setting failed: ${error.message}`;
-    } finally {
-      await loadMailStatus();
-    }
-  };
-}
-
-if (mailMessagesEl) {
-  mailMessagesEl.onclick = async (event) => {
-    const button = event.target.closest(".mail-delete-btn");
-    if (!button) {
-      return;
-    }
-    const messageId = String(button.dataset.messageId || "").trim();
-    if (!messageId) {
-      mailHintEl.textContent = "This message cannot be deleted because it has no message id.";
-      return;
-    }
-    button.disabled = true;
-    mailHintEl.textContent = "Deleting message...";
-    try {
-      const r = await fetch("/api/mail/move", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          destination: "trash",
-          messageId
-        })
-      });
-      const j = await r.json();
-      if (!r.ok || j.ok === false) {
-        throw new Error(j.error || "mail delete failed");
-      }
-      mailHintEl.textContent = "Message moved to trash.";
-      await loadMailStatus();
-    } catch (error) {
-      button.disabled = false;
-      mailHintEl.textContent = `Mail delete failed: ${error.message}`;
-    }
-  };
-}
-
 refreshRegressionBtn.onclick = loadRegressionSuites;
 runAllRegressionsBtn.onclick = async () => {
   runAllRegressionsBtn.disabled = true;
@@ -730,59 +508,63 @@ resetEventHistoryBtn.onclick = () => {
   hintEl.textContent = "Activity feed reset. Only new job and task updates will be shown from now on.";
 };
 refreshQueueBtn.onclick = loadTaskQueue;
-todoAddBtn.onclick = async () => {
-  const text = String(todoInputEl?.value || "").trim();
-  if (!text) {
-    if (todoHintEl) {
-      todoHintEl.textContent = "Type a to do item first.";
-    }
-    return;
-  }
-  todoAddBtn.disabled = true;
-  if (todoHintEl) {
-    todoHintEl.textContent = "Adding to do item...";
-  }
-  try {
-    const r = await fetch("/api/todos", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        text,
-        createdBy: "user",
-        source: "ui"
-      })
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "failed to add to do item");
-    }
-    todoInputEl.value = "";
-    await loadTodoList();
-  } catch (error) {
-    if (todoHintEl) {
-      todoHintEl.textContent = error.message;
-    }
-  } finally {
-    todoAddBtn.disabled = false;
-  }
-};
 questionTimeBtn.onclick = () => {
   replayWaitingQuestionThroughAvatar();
 };
 dispatchNextBtn.onclick = dispatchNextTask;
-reloadFilesBtn.onclick = () => loadStateInspector({ preserveSelection: true });
-resetSimpleStateBtn.onclick = resetToSimpleProjectState;
-scopeSelect.onchange = () => loadStateInspector({ preserveSelection: true });
+if (reloadFilesBtn) {
+  reloadFilesBtn.onclick = () => loadStateInspector({ preserveSelection: true });
+}
+if (resetSimpleStateBtn) {
+  resetSimpleStateBtn.onclick = resetToSimpleProjectState;
+}
+if (scopeSelect) {
+  scopeSelect.onchange = () => loadStateInspector({ preserveSelection: true });
+}
 refreshBrainsBtn.onclick = loadBrainConfig;
 refreshSecretsBtn.onclick = loadSecretsCatalog;
-refreshPromptReviewBtn.onclick = loadPromptReview;
 saveBrainsBtn.onclick = saveBrainConfig;
 refreshNovaBtn.onclick = loadNovaConfig;
 saveNovaBtn.onclick = saveNovaConfig;
 refreshToolsBtn.onclick = loadToolConfig;
 saveToolsBtn.onclick = saveToolConfig;
-refreshProjectsBtn.onclick = loadProjectConfig;
-saveProjectsBtn.onclick = saveProjectConfig;
+refreshPluginsBtn.onclick = loadPluginManagerPanel;
+if (installPluginUploadBtn) {
+  installPluginUploadBtn.onclick = installUploadedPluginPackage;
+}
+if (refreshPluginPermissionsBtn) {
+  refreshPluginPermissionsBtn.onclick = () => loadPluginPermissionRules();
+}
+if (savePluginPermissionsBtn) {
+  savePluginPermissionsBtn.onclick = savePluginPermissionRules;
+}
+if (refreshPluginTaskLifecycleBtn) {
+  refreshPluginTaskLifecycleBtn.onclick = loadPluginTaskLifecycleOutput;
+}
+if (pluginTaskLifecycleCreateBtn) {
+  pluginTaskLifecycleCreateBtn.onclick = createPluginLifecycleTask;
+}
+if (pluginTaskLifecycleOutputBtn) {
+  pluginTaskLifecycleOutputBtn.onclick = loadPluginTaskLifecycleOutput;
+}
+if (pluginTaskLifecycleWaitBtn) {
+  pluginTaskLifecycleWaitBtn.onclick = waitForPluginTaskLifecycleTask;
+}
+if (pluginTaskLifecycleStopBtn) {
+  pluginTaskLifecycleStopBtn.onclick = stopPluginLifecycleTask;
+}
+if (pluginTaskLifecycleAnswerBtn) {
+  pluginTaskLifecycleAnswerBtn.onclick = answerPluginLifecycleTask;
+}
+if (refreshPluginSessionMemoryBtn) {
+  refreshPluginSessionMemoryBtn.onclick = () => loadPluginSessionMemoryState();
+}
+if (capturePluginSessionMemoryBtn) {
+  capturePluginSessionMemoryBtn.onclick = capturePluginSessionMemoryTask;
+}
+if (refreshPluginCronBtn) {
+  refreshPluginCronBtn.onclick = () => loadPluginCronHardeningStatus();
+}
 addBrainEndpointBtn.onclick = addBrainEndpointDraft;
 addCustomBrainBtn.onclick = addCustomBrainDraft;
 setPanelOpen(loadPanelOpenPreference());
@@ -800,33 +582,35 @@ tabButtons.forEach((button) => {
   button.onclick = () => activateTab(button.dataset.tabTarget);
 });
 novaSubtabButtons.forEach((button) => {
-  button.onclick = () => activateNovaSubtab(button.dataset.novaSubtabTarget);
+  button.onclick = () => {
+    activateNovaSubtab(button.dataset.novaSubtabTarget);
+  };
 });
 brainSubtabButtons.forEach((button) => {
   button.onclick = () => activateBrainSubtab(button.dataset.brainSubtabTarget);
 });
-projectsSubtabButtons.forEach((button) => {
-  button.onclick = () => activateProjectsSubtab(button.dataset.projectsSubtabTarget);
-});
 secretsSubtabButtons.forEach((button) => {
   button.onclick = () => activateSecretsSubtab(button.dataset.secretsSubtabTarget);
+});
+pluginsSubtabButtons.forEach((button) => {
+  button.onclick = () => activatePluginsSubtab(button.dataset.pluginsSubtabTarget);
+});
+capabilitiesSubtabButtons.forEach((button) => {
+  button.onclick = () => activateCapabilitiesSubtab(button.dataset.capabilitiesSubtabTarget);
+});
+systemSubtabButtons.forEach((button) => {
+  button.onclick = () => activateSystemSubtab(button.dataset.systemSubtabTarget);
 });
 queueSubtabButtons.forEach((button) => {
   button.onclick = () => activateQueueSubtab(button.dataset.queueSubtabTarget);
 });
-calendarSubtabButtons.forEach((button) => {
-  button.onclick = () => activateCalendarSubtab(button.dataset.calendarSubtabTarget);
-});
-jobsSubtabButtons.forEach((button) => {
-  button.onclick = () => activateJobsSubtab(button.dataset.jobsSubtabTarget);
-});
 activateNovaSubtab(activeNovaSubtabId || "novaIdentityPanel");
-activateBrainSubtab("brainsEndpointsPanel");
-activateProjectsSubtab(activeProjectsSubtabId || "projectsStatePanel");
+activateBrainSubtab("brainsStatusPanel");
 activateSecretsSubtab(activeSecretsSubtabId || "secretsOverviewPanel");
+activatePluginsSubtab(activePluginsSubtabId || "pluginsInventoryPanel");
+activateCapabilitiesSubtab(activeCapabilitiesSubtabId || "capabilitiesToolsPanel");
+activateSystemSubtab(activeSystemSubtabId || "systemGatewayPanel");
 activateQueueSubtab(activeQueueSubtabId || "taskQueueQueuedPanel");
-activateCalendarSubtab(activeCalendarSubtabId || "calendarDailyPanel");
-activateJobsSubtab(activeJobsSubtabId || "jobsSchedulesPanel");
 initVoiceRecognition();
 updateAccessSummary();
 refreshStatus();
@@ -834,16 +618,15 @@ loadRuntimeOptions();
 loadNovaConfig();
 loadBrainConfig();
 loadSecretsCatalog();
-loadPromptReview();
 loadToolConfig();
-loadProjectConfig();
+loadPluginManagerPanel();
 loadTaskQueue();
-loadMailStatus();
 loadCronJobs();
-loadCalendarEvents();
 refreshRegressionCommandUi();
 loadRegressionSuites();
-loadStateInspector({ preserveSelection: true });
+if (scopeSelect) {
+  loadStateInspector({ preserveSelection: true });
+}
 pollCronEvents();
 pollTaskEvents();
 renderAttachmentList();
@@ -851,4 +634,3 @@ updateRunButtonState();
 setInterval(refreshStatus, 15000);
 setInterval(pollCronEvents, 15000);
 setInterval(pollTaskEvents, 15000);
-setInterval(loadMailStatus, 30000);

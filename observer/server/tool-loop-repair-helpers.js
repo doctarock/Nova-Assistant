@@ -379,7 +379,7 @@ function buildLocalRepeatedToolLoopRepair({
       return {
         ok: true,
         decision: {
-          assistant_message: "The named first target did not yield progress, so I’m advancing to the next concrete target.",
+          assistant_message: "The named first target did not yield progress, so Iï¿½m advancing to the next concrete target.",
           tool_calls: [toolCall],
           final: false
         },
@@ -395,7 +395,7 @@ function buildLocalRepeatedToolLoopRepair({
       return {
         ok: true,
         decision: {
-          assistant_message: "I’m moving from planning to the named concrete target.",
+          assistant_message: "Iï¿½m moving from planning to the named concrete target.",
           tool_calls: [toolCall],
           final: false
         },
@@ -411,7 +411,7 @@ function buildLocalRepeatedToolLoopRepair({
       return {
         ok: true,
         decision: {
-          assistant_message: "I already inspected the startup bundle, so I’m advancing to the next concrete target.",
+          assistant_message: "I already inspected the startup bundle, so Iï¿½m advancing to the next concrete target.",
           tool_calls: [toolCall],
           final: false
         },
@@ -430,7 +430,7 @@ function buildLocalRepeatedToolLoopRepair({
         return {
           ok: true,
           decision: {
-            assistant_message: "I already inspected the startup bundle, so I’m moving to the next concrete area.",
+            assistant_message: "I already inspected the startup bundle, so Iï¿½m moving to the next concrete area.",
             tool_calls: [toolCall],
             final: false
           },
@@ -447,7 +447,7 @@ function buildLocalRepeatedToolLoopRepair({
       return {
         ok: true,
         decision: {
-          assistant_message: "I’m drilling into the canonical implementation area.",
+          assistant_message: "Iï¿½m drilling into the canonical implementation area.",
           tool_calls: [toolCall],
           final: false
         },
@@ -464,7 +464,7 @@ function buildLocalRepeatedToolLoopRepair({
       return {
         ok: true,
         decision: {
-          assistant_message: "I’m moving into the implementation workspace instead of repeating the project root scan.",
+          assistant_message: "Iï¿½m moving into the implementation workspace instead of repeating the project root scan.",
           tool_calls: [toolCall],
           final: false
         },
@@ -480,7 +480,7 @@ function buildLocalRepeatedToolLoopRepair({
       return {
         ok: true,
         decision: {
-          assistant_message: "I’m advancing to the next concrete inspection target.",
+          assistant_message: "Iï¿½m advancing to the next concrete inspection target.",
           tool_calls: [toolCall],
           final: false
         },

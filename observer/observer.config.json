@@ -3,58 +3,54 @@
     "botName": "Nova",
     "avatarModelPath": "/assets/characters/Nova.glb",
     "backgroundImagePath": "/assets/skies/sky-rainbow.png",
-    "stylizationFilterPreset": "vivid",
+    "stylizationFilterPreset": "none",
     "stylizationEffectPreset": "none",
     "reactionPathsByModel": {
       "/assets/characters/Nova.glb": {
-        "idleClip": "Charged_Ground_Slam",
-        "talkingClips": [
-          "Mirror_Viewing",
-          "Talk_with_Left_Hand_Raised",
-          "FunnyDancing_01"
-        ],
-        "paths": {
-          "idle": "Charged_Ground_Slam",
-          "calm": "Cheer_with_Both_Hands_Up",
-          "agree": "Talk_with_Left_Hand_Raised",
-          "angry": "Head_Hold_in_Pain",
-          "love": "Agree_Gesture",
-          "celebrate": "Angry_Stomp",
-          "confused": "Walking",
-          "dance": "Idle_3",
-          "sass": "Big_Heart_Gesture",
-          "hurt": "Scheming_Hand_Rub",
-          "reflect": "Idle_6",
-          "run": "Shrug",
-          "scheme": "Wave_One_Hand",
-          "shrug": "Confused_Scratch",
-          "rant": "Stand_Talking_Angry",
-          "passionate": "Mirror_Viewing",
-          "explain": "FunnyDancing_01",
-          "walk": "Hand_on_Hip_Gesture",
-          "wave": "Talk_Passionately",
-          "slam": "Running"
-        }
+        "idle": "",
+        "positive": "",
+        "negative": "",
+        "thinking": ""
       }
     },
     "roomTextures": {
-      "walls": "",
-      "floor": "",
-      "ceiling": "",
+      "roomDay": "/assets/textures/room-day.png",
+      "roomNight": "/assets/textures/room-night.png",
+      "desk": "/assets/textures/desk.png",
+      "shelf": "/assets/textures/shelf.png",
+      "walls": "/assets/textures/Rockface grey.png",
+      "floor": "/assets/textures/T_WoodTile_01_basecolor.PNG",
+      "ceiling": "/assets/textures/Cobble grey.png",
       "windowFrame": ""
     },
     "propSlots": {
-      "backWallLeft": {
+      "leftShelf": {
         "model": "",
         "scale": 1
       },
-      "backWallRight": {
+      "rightShelf": {
         "model": "",
         "scale": 1
+      },
+      "deskLeft": {
+        "model": "",
+        "scale": 1
+      },
+      "deskRight": {
+        "model": "",
+        "scale": 1
+      },
+      "backWallLeft": {
+        "model": "",
+        "scale": 2.55
+      },
+      "backWallRight": {
+        "model": "/assets/props/SM_Apple_01.glb",
+        "scale": 3
       },
       "wallLeft": {
         "model": "",
-        "scale": 1
+        "scale": 2.15
       },
       "wallRight": {
         "model": "",
@@ -62,19 +58,19 @@
       },
       "besideLeft": {
         "model": "",
-        "scale": 1
+        "scale": 1.95
       },
       "besideRight": {
         "model": "",
         "scale": 1
       },
       "outsideLeft": {
-        "model": "",
-        "scale": 1
+        "model": "/assets/props/SM_Scraggly_Bush_01a.glb",
+        "scale": 3
       },
       "outsideRight": {
-        "model": "",
-        "scale": 1
+        "model": "/assets/props/SM_TeddyBear_01.glb",
+        "scale": 1.2
       }
     },
     "voicePreferences": [
@@ -90,31 +86,119 @@
     "trust": {
       "emailCommandMinLevel": "trusted",
       "voiceCommandMinLevel": "trusted",
-      "records": [],
-      "emailSources": [],
+      "records": [
+        {
+          "id": "trust-record-3653319410",
+          "label": "Owner",
+          "email": "owner@example.com",
+          "aliases": [],
+          "trustLevel": "trusted",
+          "threshold": 0.82,
+          "signature": [],
+          "notes": "",
+          "capturedAt": 1773409574246,
+          "updatedAt": 1773409614546
+        },
+        {
+          "id": "trust-record-1209267180",
+          "label": "Trusted Contact",
+          "email": "contact@example.com",
+          "aliases": [],
+          "trustLevel": "trusted",
+          "threshold": 0.82,
+          "signature": [],
+          "notes": "",
+          "capturedAt": 0,
+          "updatedAt": 0
+        }
+      ],
+      "emailSources": [
+        {
+          "id": "trust-record-3653319410",
+          "label": "Owner",
+          "email": "owner@example.com",
+          "aliases": [],
+          "trustLevel": "trusted",
+          "notes": ""
+        },
+        {
+          "id": "trust-record-1209267180",
+          "label": "Trusted Contact",
+          "email": "contact@example.com",
+          "aliases": [],
+          "trustLevel": "trusted",
+          "notes": ""
+        }
+      ],
       "voiceProfiles": []
     }
   },
   "defaults": {
     "internetEnabled": true,
     "mountIds": [],
-    "intakeBrainId": "bitnet"
+    "intakeBrainId": "intake"
   },
   "brains": {
     "enabledIds": [
-      "bitnet",
-      "worker"
+      "intake",
+      "worker",
+      "creative_worker",
+      "vision_worker",
+      "retrieval_worker",
+      "lappy_gpu_big",
+      "code_worker",
+      "lan_73_p4",
+      "lap_planner",
+      "remote_cpu"
+    ],
+    "builtIn": [
+      {
+        "id": "intake",
+        "model": "gemma4:e4b"
+      },
+      {
+        "id": "worker",
+        "model": "gemma4:26b"
+      },
+      {
+        "id": "helper",
+        "model": "gemma3:1b"
+      }
     ],
     "endpoints": {
       "local": {
         "label": "Local Ollama",
         "baseUrl": "http://127.0.0.1:11434"
+      },
+      "lan_73": {
+        "label": "LAN 580",
+        "baseUrl": "http://192.168.1.100:11434"
+      },
+      "lappy": {
+        "label": "Lap GPU",
+        "baseUrl": "http://192.168.1.101:11434"
+      },
+      "lappy_cpu": {
+        "label": "Lap CPU",
+        "baseUrl": "http://192.168.1.101:11435"
+      },
+      "lan_73_p4": {
+        "label": "LAN P4",
+        "baseUrl": "http://192.168.1.100:11435"
       }
     },
     "assignments": {
-      "bitnet": "local",
+      "intake": "local",
       "worker": "local",
-      "helper": "local"
+      "helper": "local",
+      "remote_cpu": "lan_73",
+      "creative_worker": "lan_73",
+      "code_worker": "lan_73",
+      "vision_worker": "lan_73",
+      "retrieval_worker": "lan_73",
+      "lappy_gpu_big": "lappy",
+      "lan_73_p4": "lan_73_p4",
+      "lap_planner": "lappy_cpu"
     },
     "custom": [
       {
@@ -123,44 +207,92 @@
         "kind": "helper",
         "model": "qwen3.5:4b",
         "endpointId": "lan_73",
-        "queueLane": "lan_73",
-        "specialty": "routing", 
+        "queueLane": "lan_73_cpu",
+        "specialty": "routing",
         "toolCapable": false,
         "cronCapable": false,
         "description": "Remote CPU planner for triage, specialist selection, and completion review"
       },
       {
-        "id": "remote_gpu",
-        "label": "Remote Coder",
+        "id": "creative_worker",
+        "label": "Hermes Creative",
+        "kind": "worker",
+        "model": "hermes3",
+        "endpointId": "lan_73",
+        "queueLane": "lan_73_gpu",
+        "specialty": "creative",
+        "toolCapable": false,
+        "cronCapable": false,
+        "description": "Remote creative and ideation specialist"
+      },
+      {
+        "id": "code_worker",
+        "label": "Remote Planner",
+        "kind": "helper",
+        "model": "qwen2.5-coder:7b",
+        "endpointId": "lan_73",
+        "queueLane": "lan_73_gpu",
+        "specialty": "code",
+        "toolCapable": true,
+        "cronCapable": false,
+        "description": "Planner for triage, specialist selection, and completion review"
+      },
+      {
+        "id": "vision_worker",
+        "label": "MiniCPM Vision",
+        "kind": "worker",
+        "model": "minicpm-v",
+        "endpointId": "lan_73",
+        "queueLane": "lan_73_gpu",
+        "specialty": "vision",
+        "toolCapable": true,
+        "cronCapable": false,
+        "description": "Remote vision specialist; registered now, pending full multimodal task pipeline"
+      },
+      {
+        "id": "retrieval_worker",
+        "label": "MXBAI Retrieval",
+        "kind": "helper",
+        "model": "mxbai-embed-large",
+        "endpointId": "lan_73",
+        "queueLane": "lan_73_gpu",
+        "specialty": "retrieval",
+        "toolCapable": false,
+        "cronCapable": false,
+        "description": "Remote embedding brain; registered now, pending retrieval/index pipeline"
+      },
+      {
+        "id": "lappy_gpu_big",
+        "label": "Laptop 9B",
         "kind": "worker",
         "model": "qwen3.5:9b",
-        "endpointId": "lan_73",
-        "queueLane": "lan_73_a",
-        "specialty": "code", 
-        "toolCapable": false,
-        "cronCapable": false,
+        "endpointId": "lappy",
+        "queueLane": "lappy_gpu",
+        "specialty": "code",
+        "toolCapable": true,
+        "cronCapable": true,
+        "description": "Remote CPU routing and task-shaping brain"
+      },
+      {
+        "id": "lan_73_p4",
+        "label": "P4 9B",
+        "kind": "worker",
+        "model": "qwen3.5:9b",
+        "endpointId": "lan_73_p4",
+        "queueLane": "lan_73_p4",
+        "specialty": "general",
+        "toolCapable": true,
+        "cronCapable": true,
         "description": ""
       },
       {
-        "id": "remote_gpu",
-        "label": "Remote Coder",
+        "id": "lap_planner",
+        "label": "Gemma Router",
         "kind": "helper",
-        "model": "hermes-3",
-        "endpointId": "lan_74",
-        "queueLane": "lan_74",
-        "specialty": "creative", 
-        "toolCapable": false,
-        "cronCapable": false,
-        "description": ""
-      },
-      {
-        "id": "remote_gpu",
-        "label": "Remote Coder",
-        "kind": "helper",
-        "model": "",
-        "endpointId": "lan_74",
-        "queueLane": "lan_74",
-        "specialty": "general", 
+        "model": "functiongemma:latest",
+        "endpointId": "lappy_cpu",
+        "queueLane": "lap_cpu",
+        "specialty": "routing",
         "toolCapable": false,
         "cronCapable": false,
         "description": ""
@@ -177,10 +309,12 @@
     "projectWorkRetryCooldownMs": 1800000,
     "projectBackupIntervalMs": 900000,
     "opportunityScanIdleMs": 30000,
-    "opportunityScanIntervalMs": 15000,
+    "opportunityScanIntervalMs": 120000,
     "opportunityScanRetentionMs": 604800000,
     "opportunityScanMaxQueuedBacklog": 8,
     "noChangeMinimumConcreteTargets": 3,
+    "projectWorkMaxRetries": 5,
+    "creativeThroughputMode": "auto",
     "autoCreateProjectDirective": true,
     "autoCreateProjectTodo": true,
     "autoCreateProjectRoleTasks": true,
@@ -193,21 +327,26 @@
     "remoteTriageBrainId": "",
     "specialistMap": {
       "code": [
+        "code_worker",
         "worker"
       ],
       "document": [
-        "worker"
+        "worker",
+        "code_worker"
       ],
       "general": [
         "worker"
       ],
       "background": [
+        "code_worker",
         "worker"
       ],
       "creative": [
+        "creative_worker",
         "worker"
       ],
       "vision": [
+        "vision_worker",
         "worker"
       ],
       "retrieval": [
@@ -227,7 +366,7 @@
     "apiKey": ""
   },
   "mail": {
-    "enabled": false,
+    "enabled": true,
     "activeAgentId": "nova",
     "pollIntervalMs": 30000,
     "imap": {

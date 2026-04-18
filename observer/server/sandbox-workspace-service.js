@@ -93,7 +93,13 @@ function looksMalformedProjectName(name) {
   if (!/[a-z0-9]/i.test(text)) {
     return true;
   }
-  return /["'\`]/.test(text);
+  if (/["'\`]/.test(text)) {
+    return true;
+  }
+  if (/^task-\d{10,}$/i.test(text)) {
+    return true;
+  }
+  return false;
 }
 
 function isGenericProjectName(name, genericNames) {
@@ -109,7 +115,7 @@ async function inspectProjectCandidate(fullPath, entryName, markerFileName, gene
   const hasMarker = await pathExists(markerPath);
   let marker = null;
   if (hasMarker) {
-    marker = JSON.parse(await fs.readFile(markerPath, "utf8").catch(() => "{}"));
+    marker = JSON.parse((await fs.readFile(markerPath, "utf8").catch(() => "")) || "{}");
   }
   const hasDirective = lowerNames.has("directive.md");
   const hasPlanning = lowerNames.has("project-todo.md") || lowerNames.has("project-role-tasks.md");
@@ -435,7 +441,7 @@ main().catch((error) => {
       observerToolContainer,
       "sh",
       "-lc",
-      `cd ${observerContainerWorkspaceRoot} && ${normalizedCommand}`
+      `cd ${quoteShellPath(observerContainerWorkspaceRoot)} && ${normalizedCommand}`
     ], {
       timeoutMs: Math.max(1000, Math.min(Number(timeoutMs || 60000), 180000))
     });

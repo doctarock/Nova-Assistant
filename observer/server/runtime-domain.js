@@ -1,3 +1,6 @@
+const ENDPOINT_HEALTH_TTL_MS = 45_000;
+let endpointHealthCache = { results: [], cachedAt: 0, brainSignature: "" };
+
 function buildBrainPayload(brain, context) {
   return {
     id: brain.id,
@@ -56,12 +59,21 @@ export function registerRuntimeRoutes(context = {}) {
         context.buildBrainActivitySnapshot(),
         context.getQdrantStatus ? context.getQdrantStatus() : Promise.resolve(null)
       ]);
-      const endpointChecks = await Promise.all(
-        [...new Map(brains.map((brain) => [brain.ollamaBaseUrl, brain])).values()].map(async (brain) => ({
-          brainIds: brains.filter((entry) => entry.ollamaBaseUrl === brain.ollamaBaseUrl).map((entry) => entry.id),
-          ...(await context.inspectOllamaEndpoint(brain.ollamaBaseUrl))
-        }))
-      );
+      const uniqueEndpointBrains = [...new Map(brains.map((brain) => [brain.ollamaBaseUrl, brain])).values()];
+      const brainSignature = uniqueEndpointBrains.map((b) => b.ollamaBaseUrl).sort().join("|");
+      const cacheAge = Date.now() - endpointHealthCache.cachedAt;
+      let endpointChecks;
+      if (cacheAge < ENDPOINT_HEALTH_TTL_MS && endpointHealthCache.brainSignature === brainSignature && endpointHealthCache.results.length) {
+        endpointChecks = endpointHealthCache.results;
+      } else {
+        endpointChecks = await Promise.all(
+          uniqueEndpointBrains.map(async (brain) => ({
+            brainIds: brains.filter((entry) => entry.ollamaBaseUrl === brain.ollamaBaseUrl).map((entry) => entry.id),
+            ...(await context.inspectOllamaEndpoint(brain.ollamaBaseUrl))
+          }))
+        );
+        endpointHealthCache = { results: endpointChecks, cachedAt: Date.now(), brainSignature };
+      }
       const intakeBrain = brains.find((brain) => brain.id === "bitnet") || brains[0];
       const workerBrain = brains.find((brain) => brain.id === "worker")
         || brains.find((brain) => brain.kind === "worker")
@@ -76,14 +88,14 @@ export function registerRuntimeRoutes(context = {}) {
           status: "running"
         },
         intake: {
-          label: intakeBrain?.label || "CPU Intake",
+          label: intakeBrain?.label || "Intake",
           model: intakeBrain?.model || "",
           endpointId: intakeBrain?.endpointId || "local",
           baseUrl: intakeBrain?.ollamaBaseUrl || context.localOllamaBaseUrl,
           running: true
         },
         worker: {
-          label: workerBrain?.label || "Qwen Worker",
+          label: workerBrain?.label || "Worker",
           model: workerBrain?.model || "",
           endpointId: workerBrain?.endpointId || "local",
           baseUrl: workerBrain?.ollamaBaseUrl || context.localOllamaBaseUrl,

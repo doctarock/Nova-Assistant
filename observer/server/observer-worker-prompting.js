@@ -9,17 +9,48 @@ export function createObserverWorkerPrompting(context = {}) {
     buildTaskCapabilityPromptLines,
     extractConcreteTaskFileTargets,
     extractTaskDirectiveValue,
+    fs,
     getAgentPersonaName,
     getObserverConfig,
+    getPluginToolsByScope = () => [],
     getProjectNoChangeMinimumTargets,
+    selectToolsForTask = null,
     inferTaskCapabilityProfile,
     inferTaskSpecialty,
     isProjectCycleMessage,
+    loopLessonsHostPath,
     normalizeContainerPathForComparison,
     normalizeToolCallRecord,
     normalizeToolName,
     parseToolCallArgs
   } = context;
+
+  async function readLoopLessonsNote() {
+    if (!fs || !loopLessonsHostPath) return "";
+    try {
+      const content = await fs.readFile(loopLessonsHostPath, "utf8");
+      const trimmed = String(content || "").trim();
+      if (!trimmed) return "";
+      // Extract individual lesson blocks (each starts with ## )
+      const blocks = [];
+      let current = [];
+      for (const line of trimmed.split("\n")) {
+        if (line.startsWith("## ") && current.length) {
+          blocks.push(current.join("\n").trim());
+          current = [line];
+        } else {
+          current.push(line);
+        }
+      }
+      if (current.length) blocks.push(current.join("\n").trim());
+      // Emit last 6 lessons, skip the header block
+      const lessons = blocks.filter((b) => b.startsWith("## ")).slice(-6);
+      if (!lessons.length) return "";
+      return `Past loop repair lessons — avoid repeating these patterns:\n${lessons.join("\n")}`;
+    } catch {
+      return "";
+    }
+  }
 
   function extractToolPathArg(toolCall) {
     const args = parseToolCallArgs(toolCall) || {};
@@ -47,6 +78,9 @@ export function createObserverWorkerPrompting(context = {}) {
       || /\bidentify the best next step\b/.test(text)
       || /\bclarify the most shippable next step\b/.test(text)
       || /\brecord the next concrete step\b/.test(text)
+      || /\bupdate this todo file after each work pass\b/.test(text)
+      || (/\bcheck(?:ing)? off completed items\b/.test(text) && /\bfollow-up tasks\b/.test(text))
+      || /\bkeep project-todo\.md and project-role-tasks\.md aligned\b/.test(text)
       || /\brequired for export\b/.test(text)
       || /\bexport blocker\b/.test(text)
       || /\bcompletion evidence\b/.test(text)
@@ -56,6 +90,8 @@ export function createObserverWorkerPrompting(context = {}) {
   function buildWorkerSpecialtyPromptLines({ brain, message = "", forceToolUse = false, preset = "autonomous", taskSpecialty = "" } = {}) {
     const text = String(message || "");
     const lower = text.toLowerCase();
+    const looksScienceResearch = /\b(research|scientific|science|literature review|evidence synthesis|peer[- ]reviewed|citations?|references|study|studies|journal|paper|papers|methodology|hypothesis|dataset|analysis|biology|biological|biochem(?:istry)?|chemistry|chemical|metabolic|pathway|pathways|genetic|genomics|proteomics|clinical|bioinformatics)\b/.test(lower);
+    const looksSensitiveBioChemDesign = /\b(metabolic pathways?|pathway design|biological pathway|bioengineering|synthetic biology|gene editing|pathogen|toxin|viral|virus|culture conditions?|lab protocol|wet lab)\b/.test(lower);
     const minConcreteTargets = getProjectNoChangeMinimumTargets();
     const specialty = String(taskSpecialty || brain?.specialty || "").trim().toLowerCase();
     const kind = String(brain?.kind || "").trim().toLowerCase();
@@ -74,6 +110,22 @@ export function createObserverWorkerPrompting(context = {}) {
       forceToolUse,
       preset
     });
+
+    if (String(preset || "").trim() === "internal-recreation") {
+      return [
+        "You have unstructured free time. Use tools to do something genuinely interesting — browse the web, write a thought, sketch a project idea, or create a short piece of writing.",
+        "Before you return final=true, you must have written something to a file. Writing to your personal memory file counts.",
+        "Do not describe what you plan to do in final_text. Describe what you actually did.",
+        "Natural, first-person language is fine in final_text. There are no grammar restrictions for recreational writing.",
+        "Never wrap your JSON response in markdown fences.",
+        "Do not output headings, bullet lists, or analysis before the JSON object.",
+        "Keep assistant_message short and factual, ideally one sentence under 20 words.",
+        "For file-based tools such as read_document, list_files, write_file, and edit_file, always include the explicit full file or directory path in the path field.",
+        "If you call write_file, include the full intended content. Do not call write_file with empty content.",
+        "Do not claim to have browsed or read something you have not actually fetched with a tool.",
+        ...buildTaskCapabilityPromptLines(capabilityProfile)
+      ];
+    }
 
     const lines = [
       "Your final_text must explain what you actually checked, changed, or concluded.",
@@ -100,6 +152,7 @@ export function createObserverWorkerPrompting(context = {}) {
     if (isProjectCycle) {
       lines.push("For project-cycle work: read PROJECT-TODO.md once, then move on to concrete inspection such as list_files, package manifests, source files, role-task boards, or TODO/FIXME locations. Do not keep rereading the same planning files unless they changed.");
       lines.push("For project-cycle work: also maintain PROJECT-ROLE-TASKS.md as a running role-based task board by adding, checking off, or refining concrete role tasks.");
+      lines.push("For project-cycle work: use only standard markdown checkbox format in PROJECT-TODO.md and PROJECT-ROLE-TASKS.md. Unchecked items must be written as '- [ ] task text' and completed items as '- [x] task text'. There are exactly two states: pending '- [ ]' and done '- [x]'. Keep items as '- [ ]' while work is in progress — the task queue already tracks what is currently running, so the TODO file only needs to record whether the work is finished. Do not use [y], [n], bare [x] without a bullet, or any other intermediate marker.");
       lines.push("For project-cycle work: if the available project input is mainly a zip or other archive and the real working files are not extracted yet, using unzip to unpack it inside the workspace is a valid concrete first move.");
       if (inspectFirstTarget || expectedFirstMove) {
         lines.push("For project-cycle work: your first response should normally be a non-final JSON tool envelope that obeys the named first move, then reads the required planning files once, then advances to additional concrete inspection or edits.");
@@ -110,8 +163,13 @@ export function createObserverWorkerPrompting(context = {}) {
       if (inspectFirstTarget || expectedFirstMove) {
         lines.push(`For project-cycle work: obey the named starting target in the task brief. ${expectedFirstMove || `Inspect ${inspectFirstTarget} before broader exploration.`}`);
       }
+      lines.push("For project-cycle work: unless the current objective or active role explicitly calls for it, defer late-pass sweeps such as accessibility, SEO, marketing, or compliance until the project is properly scoped and core implementation work has moved forward.");
       if (/\/directive\.md$/i.test(inspectFirstTarget)) {
         lines.push("For project-cycle work: when the named target is directive.md, treat that directive file as a concrete project file. Editing it to complete the stated directive counts as valid concrete progress.");
+      }
+      lines.push("For project-cycle work: never write container-internal paths such as '/home/openclaw/...' or '/home/openclaw/.observer-sandbox/...' into any document content, markdown file, or project artifact. These paths are implementation details of the execution environment and have no place in project documents.");
+      if (specialty === "creative") {
+        lines.push("For creative project-cycle work: the project files are narrative documents. Do not write CSS properties, hex color codes, WCAG compliance notes, accessibility audit findings, or any web-development content into story files, world-building documents, character sheets, or manuscript chapters. If the existing content of a file appears to be incorrectly populated with technical/web content, treat it as corrupted and attempt to restore narrative content from the directive or other project context.");
       }
       lines.push("For project-cycle work: if a named concrete file is unexpectedly empty or corrupted, try to repair it from grounded project context before broadening inspection.");
       lines.push("For project-cycle work: if that repair is not safe or the needed capability is missing, search the skill library or record a tool request instead of looping on more reads.");
@@ -171,6 +229,14 @@ export function createObserverWorkerPrompting(context = {}) {
     if (specialty === "retrieval") {
       lines.push("You are a retrieval-oriented worker. Prioritize finding, comparing, and grounding information from the workspace or allowed sources.");
       lines.push("Do not pretend to implement code changes unless the task explicitly requires it and you actually made them.");
+      lines.push("For research-heavy requests, separate verified evidence from assumptions and name the specific sources you read.");
+      lines.push("Include confidence notes for uncertain claims instead of presenting speculation as settled fact.");
+      if (looksScienceResearch) {
+        lines.push("For scientific research tasks, prefer peer-reviewed or primary references when possible and clearly label evidence gaps.");
+      }
+      if (looksSensitiveBioChemDesign) {
+        lines.push("For bio/chemical pathway or optimization requests, stay high-level and do not provide actionable wet-lab procedures, parameter tuning, or acquisition guidance.");
+      }
     }
 
     if (!specialty && isQueuedExecution) {
@@ -194,16 +260,80 @@ export function createObserverWorkerPrompting(context = {}) {
     internetEnabled = true,
     selectedMountIds = [],
     forceToolUse = false,
-    sessionId = "Main"
+    sessionId = "Main",
+    recentExchanges = [],
+    systemContext = {}
   } = {}) {
     const memoryGuidance = buildPromptMemoryGuidanceNote();
     const skillsGuidance = await buildInstalledSkillsGuidanceNote();
+
+    const contextLines = [];
+
+    const inProgressCount = Number(systemContext?.inProgressCount || 0);
+    const queuedCount = Number(systemContext?.queuedCount || 0);
+    if (inProgressCount > 0 || queuedCount > 0) {
+      const parts = [];
+      if (inProgressCount > 0) {
+        parts.push(`${inProgressCount} task${inProgressCount === 1 ? "" : "s"} running`);
+      }
+      if (queuedCount > 0) {
+        parts.push(`${queuedCount} queued`);
+      }
+      contextLines.push(`System state: ${parts.join(", ")}.`);
+      const runningNames = Array.isArray(systemContext?.inProgressNames) ? systemContext.inProgressNames.filter(Boolean) : [];
+      if (runningNames.length) {
+        contextLines.push(`Running: ${runningNames.slice(0, 3).join("; ")}`);
+      }
+      contextLines.push("When asked about ongoing work, reference the running tasks above if relevant.");
+    }
+
+    const validExchanges = Array.isArray(recentExchanges) ? recentExchanges.filter((e) => e?.text && e?.role) : [];
+    if (validExchanges.length) {
+      const now = Date.now();
+      contextLines.push("Recent conversation (oldest first):");
+      for (const exchange of validExchanges.slice(-12)) {
+        const label = exchange.role === "user" ? "User" : "Agent";
+        // Relative timestamp when available
+        const tsLabel = exchange.ts
+          ? (() => {
+              const ageSecs = Math.round((now - Number(exchange.ts)) / 1000);
+              if (ageSecs < 90) return `${ageSecs}s ago`;
+              if (ageSecs < 3600) return `${Math.round(ageSecs / 60)}m ago`;
+              return `${Math.round(ageSecs / 3600)}h ago`;
+            })()
+          : null;
+        // For agent turns: keep the first 2 paragraphs (more meaningful than raw char slice)
+        const rawText = String(exchange.text || "");
+        let displayText;
+        if (exchange.role === "agent") {
+          const paras = rawText.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+          displayText = paras.slice(0, 2).join(" ").replace(/\s+/g, " ");
+          if (displayText.length > 400) displayText = displayText.slice(0, 397) + "...";
+        } else {
+          displayText = rawText.replace(/\s+/g, " ");
+          if (displayText.length > 350) displayText = displayText.slice(0, 347) + "...";
+        }
+        // Flag enqueued / clarify agent turns so model knows what happened
+        const actionNote = exchange.action === "enqueue" ? " [queued task]"
+          : exchange.action === "clarify" ? " [asked clarification]"
+          : "";
+        contextLines.push(`${label}${tsLabel ? ` (${tsLabel})` : ""}${actionNote}: ${displayText}`);
+      }
+      contextLines.push(
+        "Use the above history to resolve pronouns, follow-up references ('do it', 'same thing', 'that one', 'try again'), " +
+        "and conversational continuity. If the current message clearly refers to something in history, answer in context — do not ask the user to repeat themselves."
+      );
+    }
+
+    const intakeTools = [...INTAKE_TOOLS, ...getPluginToolsByScope("intake")];
+
     return [
       "You are the CPU intake model for an observer app.",
       `Your name is ${getAgentPersonaName()}.`,
       "You can either answer directly, optionally using light observer tools, or enqueue one or more worker tasks for a Qwen tool-using worker.",
       "Use direct replies for simple conversational questions and lightweight observer status questions.",
       "For requests about phrasing, wording, titles, structure advice, examples, brainstorming, or suggested next steps, prefer reply_only and answer directly.",
+      "For questions about the host machine — GPU, VRAM, system load, RAM, running processes, uptime, or weather — use the relevant intake tool (get_gpu_status, get_host_system_status, get_running_processes, get_weather) and reply directly. Do not enqueue these.",
       "Use enqueue for anything that needs files, shell commands, web access, coding, multi-step execution, or follow-through.",
       "Do not invent files, documents, checklists, schedules, recurring jobs, or background tasks unless the user explicitly asked you to create, queue, or schedule them.",
       "You have direct access to prompt-memory files through intake tools. Use them instead of guessing user identity, preferences, or standing instructions.",
@@ -218,20 +348,22 @@ export function createObserverWorkerPrompting(context = {}) {
       "If deeper work is needed, do not answer with a blunt 'No'. Say you will check, verify, or take a closer look.",
       "Reply with JSON only.",
       "Available intake tools:",
-      ...INTAKE_TOOLS.map((tool) => `- ${tool.name}: ${tool.description}`),
+      ...intakeTools.map((tool) => `- ${tool.name}: ${tool.description}`),
       "If you need a light observer tool, return {\"assistant_message\":\"...\",\"tool_calls\":[...],\"tasks\":[],\"action\":\"reply_only|enqueue\",\"reason\":\"...\",\"final\":false}.",
       "Each tool call must look like {\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"tool_name\",\"arguments\":\"{\\\"key\\\":\\\"value\\\"}\"}}.",
-      "When finished, return {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"tasks\":[...],\"action\":\"reply_only|enqueue\",\"reason\":\"...\",\"final\":true}.",
+      "When finished, return {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"tasks\":[...],\"action\":\"reply_only|enqueue|clarify\",\"reason\":\"...\",\"final\":true}.",
       "Task schema: {\"message\":\"string\",\"every\":\"optional cadence like 15m|2h|1d\",\"delay\":\"optional delay like 5m\"}",
       "If action is reply_only, tasks must be an empty array.",
       "Only set every or delay when the user explicitly requested recurring or delayed execution.",
       "If you can fully satisfy the request with final_text, do not enqueue follow-up worker tasks.",
+      "Use action clarify ONLY when the request is genuinely ambiguous and one short question will resolve it. Set final_text to the question itself. Do not clarify things you can reasonably infer from context or history.",
       `Internet enabled: ${internetEnabled}`,
       `Selected mounts: ${selectedMountIds.join(", ") || "none"}`,
       `Force tool use: ${forceToolUse}`,
       `Session id: ${sessionId}`,
       memoryGuidance,
-      skillsGuidance
+      skillsGuidance,
+      ...contextLines
     ].join("\n");
   }
 
@@ -244,15 +376,26 @@ export function createObserverWorkerPrompting(context = {}) {
     preset = "autonomous",
     preparedAttachmentsFiles = [],
     visionImageCount = 0,
-    runtimeNotesExtra = []
+    runtimeNotesExtra = [],
+    internalJobType = ""
   } = {}) {
     const observerConfig = getObserverConfig();
     const allowedMounts = observerConfig.mounts.filter((mount) => selectedMountIds.includes(mount.id));
     const memoryGuidance = buildPromptMemoryGuidanceNote();
     const skillsGuidance = await buildInstalledSkillsGuidanceNote();
+    const loopLessons = await readLoopLessonsNote();
     const taskSpecialty = inferTaskSpecialty({ message, notes: Array.isArray(runtimeNotesExtra) ? runtimeNotesExtra.join("\n") : "" });
     const workerSpecialtyLines = buildWorkerSpecialtyPromptLines({ brain, message, forceToolUse, preset, taskSpecialty });
     const projectCycleMessage = isProjectCycleMessage(message);
+
+    // Select minimal tool set when the task signals are specific enough
+    const pluginTools = getPluginToolsByScope("worker");
+    const toolSelection = typeof selectToolsForTask === "function"
+      ? selectToolsForTask(message, internalJobType, WORKER_TOOLS, pluginTools)
+      : { tools: WORKER_TOOLS, pluginTools, confident: false };
+    const effectiveWorkerTools = toolSelection.tools;
+    const effectivePluginTools = toolSelection.pluginTools;
+
     return [
       `You are the ${brain.label}.`,
       `Your public-facing name is ${getAgentPersonaName()}.`,
@@ -275,7 +418,8 @@ export function createObserverWorkerPrompting(context = {}) {
         ? `Image attachments are available for multimodal analysis (${visionImageCount} image${visionImageCount === 1 ? "" : "s"}).`
         : "",
       "Available tools:",
-      ...WORKER_TOOLS.map((tool) => `- ${tool.name}: ${tool.description}`),
+      ...effectiveWorkerTools.map((tool) => `- ${tool.name}: ${tool.description}`),
+      ...effectivePluginTools.map((tool) => `- ${tool.name}: ${tool.description}`),
       "Respond with JSON only.",
       "If you need tools, return {\"assistant_message\":\"...\",\"tool_calls\":[...],\"final\":false}.",
       "Each tool call must look like {\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"tool_name\",\"arguments\":\"{\\\"key\\\":\\\"value\\\"}\"}}.",
@@ -286,6 +430,7 @@ export function createObserverWorkerPrompting(context = {}) {
       "Never return role=tool or tool_results as the top-level response. Tool results are supplied by Observer, not by you.",
       "Do not return final=true after analysis alone. Final=true is only for a concrete change, a concrete artifact, or the exact no-change conclusion with inspected paths.",
       ...workerSpecialtyLines,
+      loopLessons,
       memoryGuidance,
       skillsGuidance
     ].concat(runtimeNotesExtra).filter(Boolean).join("\n");

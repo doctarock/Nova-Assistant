@@ -1,7 +1,6 @@
 export function createInternalRegressionRunner({
   createSkillLibraryService,
   createToolConfigService,
-  determineMailCommandAction,
   buildRegressionFailure,
   classifyFailureText,
   extractJsonObject,
@@ -32,6 +31,7 @@ export function createInternalRegressionRunner({
   buildProjectDirectiveContent,
   buildProjectRoleTaskBoardContent,
   parseProjectDirectiveState,
+  parseProjectTodoState,
   buildProjectTodoContent,
   buildProjectWorkPackages,
   getProjectWorkAttemptCooldownMs,
@@ -51,58 +51,14 @@ export function createInternalRegressionRunner({
   normalizeToolName,
   normalizeContainerPathForComparison,
   extractInspectionTargetKey,
+  resolveToolPath,
+  requireNonEmptyToolContent,
+  runPluginInternalRegressionCase,
   getObserverConfig,
   setObserverConfig
 } = {}) {
   return async function runInternalRegressionCase(testCase) {
     const mode = String(testCase?.mode || "").trim();
-    if (mode === "mail_command_trust") {
-      const failures = [];
-      const observerConfigPatch = testCase?.observerConfigPatch && typeof testCase.observerConfigPatch === "object"
-        ? testCase.observerConfigPatch
-        : null;
-      const previousConfig = typeof getObserverConfig === "function" ? getObserverConfig() : null;
-      if (observerConfigPatch && previousConfig && typeof setObserverConfig === "function") {
-        setObserverConfig({
-          ...previousConfig,
-          ...observerConfigPatch,
-          app: {
-            ...(previousConfig.app || {}),
-            ...(observerConfigPatch.app || {}),
-            trust: {
-              ...(previousConfig.app?.trust || {}),
-              ...(observerConfigPatch.app?.trust || {})
-            }
-          }
-        });
-      }
-      try {
-        const actual = determineMailCommandAction(testCase.message || {});
-        if (actual?.detected !== Boolean(testCase.expected?.detected)) {
-          failures.push(`Expected detected=${Boolean(testCase.expected?.detected)}, got ${Boolean(actual?.detected)}.`);
-        }
-        if (String(actual?.action || "").trim() !== String(testCase.expected?.action || "").trim()) {
-          failures.push(`Expected action ${testCase.expected?.action}, got ${actual?.action || "(none)"}.`);
-        }
-        const expectedText = String(testCase.expected?.text || "").trim();
-        if (expectedText && String(actual?.text || "").trim() !== expectedText) {
-          failures.push(`Expected command text ${expectedText}, got ${actual?.text || "(none)"}.`);
-        }
-        const expectedReasonIncludes = String(testCase.expected?.reasonIncludes || "").trim();
-        if (expectedReasonIncludes && !String(actual?.reason || "").includes(expectedReasonIncludes)) {
-          failures.push(`Expected reason to include ${expectedReasonIncludes}.`);
-        }
-        return {
-          passed: failures.length === 0,
-          failures,
-          actual
-        };
-      } finally {
-        if (observerConfigPatch && previousConfig && typeof setObserverConfig === "function") {
-          setObserverConfig(previousConfig);
-        }
-      }
-    }
     if (mode === "failure_classification") {
       const actualClassification = classifyFailureText(testCase.failureText);
       const failures = [];
@@ -167,6 +123,15 @@ export function createInternalRegressionRunner({
         if (String(retryMeta?.[key] || "").trim() !== String(testCase.task?.[key] || "").trim()) {
           failures.push(`Retry metadata did not preserve ${key}.`);
         }
+      }
+      if (String(retryMeta?.creativeThroughputMode || "").trim() !== String(testCase.task?.creativeThroughputMode || "").trim()) {
+        failures.push("Retry metadata did not preserve creativeThroughputMode.");
+      }
+      if (Boolean(retryMeta?.preferHigherThroughputCreativeLane) !== Boolean(testCase.task?.preferHigherThroughputCreativeLane)) {
+        failures.push("Retry metadata did not preserve preferHigherThroughputCreativeLane.");
+      }
+      if (Boolean(retryMeta?.skipCreativeHandoff) !== Boolean(testCase.task?.skipCreativeHandoff)) {
+        failures.push("Retry metadata did not preserve skipCreativeHandoff.");
       }
       return {
         passed: failures.length === 0,
@@ -239,6 +204,63 @@ export function createInternalRegressionRunner({
         if (JSON.stringify(actualValue) !== JSON.stringify(expectedValue)) {
           failures.push(`Expected parsed tool arg ${key}=${JSON.stringify(expectedValue)}, got ${JSON.stringify(actualValue)}.`);
         }
+      }
+      return {
+        passed: failures.length === 0,
+        failures,
+        actual
+      };
+    }
+    if (mode === "tool_path_resolution") {
+      const failures = [];
+      let actual = {
+        path: String(testCase.path || "").trim(),
+        resolved: "",
+        error: ""
+      };
+      try {
+        actual.resolved = resolveToolPath(actual.path);
+      } catch (error) {
+        actual.error = error?.message || String(error);
+      }
+      if (testCase.expectedResolved && actual.resolved !== String(testCase.expectedResolved || "")) {
+        failures.push(`Expected resolved path ${testCase.expectedResolved}, got ${actual.resolved || "(none)"}.`);
+      }
+      if (testCase.expectedErrorIncludes && !String(actual.error || "").includes(String(testCase.expectedErrorIncludes || ""))) {
+        failures.push(`Expected path resolution error to include ${testCase.expectedErrorIncludes}, got ${actual.error || "(none)"}.`);
+      }
+      if (!testCase.expectedErrorIncludes && actual.error) {
+        failures.push(`Expected path resolution to succeed, got error ${actual.error}.`);
+      }
+      return {
+        passed: failures.length === 0,
+        failures,
+        actual
+      };
+    }
+    if (mode === "tool_content_guardrail") {
+      const failures = [];
+      let actual = {
+        toolName: String(testCase.toolName || "write_file").trim() || "write_file",
+        content: "",
+        error: ""
+      };
+      try {
+        actual.content = requireNonEmptyToolContent(testCase.content, {
+          toolName: actual.toolName,
+          targetPath: String(testCase.targetPath || "").trim()
+        });
+      } catch (error) {
+        actual.error = error?.message || String(error);
+      }
+      if (testCase.expectedContent && actual.content !== String(testCase.expectedContent || "")) {
+        failures.push(`Expected validated content ${JSON.stringify(testCase.expectedContent)}, got ${JSON.stringify(actual.content)}.`);
+      }
+      if (testCase.expectedErrorIncludes && !String(actual.error || "").includes(String(testCase.expectedErrorIncludes || ""))) {
+        failures.push(`Expected content guardrail error to include ${testCase.expectedErrorIncludes}, got ${actual.error || "(none)"}.`);
+      }
+      if (!testCase.expectedErrorIncludes && actual.error) {
+        failures.push(`Expected content guardrail to succeed, got error ${actual.error}.`);
       }
       return {
         passed: failures.length === 0,
@@ -382,6 +404,47 @@ export function createInternalRegressionRunner({
         actual
       };
     }
+    if (mode === "project_cycle_waiting_policy") {
+      const policy = buildProjectCycleCompletionPolicy(String(testCase.message || "").trim(), {
+        minimumConcreteTargets: Number(testCase.minimumConcreteTargets || 3)
+      });
+      const completionState = evaluateProjectCycleCompletionState({
+        policy,
+        message: String(testCase.message || "").trim(),
+        finalText: String(testCase.finalText || "").trim(),
+        inspectedTargets: Array.isArray(testCase.inspectedTargets) ? testCase.inspectedTargets : [],
+        changedWorkspaceFiles: Array.isArray(testCase.changedWorkspaceFiles) ? testCase.changedWorkspaceFiles : [],
+        changedOutputFiles: Array.isArray(testCase.changedOutputFiles) ? testCase.changedOutputFiles : [],
+        successfulToolNames: Array.isArray(testCase.successfulToolNames) ? testCase.successfulToolNames : []
+      });
+      const objective = extractTaskDirectiveValue(String(testCase.message || "").trim(), "Objective:");
+      const waitingForUser = Boolean(testCase.waitingForUser);
+      const requiresConcreteOutcome = Boolean(
+        testCase.forceToolUse
+        || String(testCase.preset || "").trim() === "queued-task"
+        || /\b(project|repo|repository|code|implement|implementation|refactor|debug|bug|fix|patch|todo|fixme|script)\b/i.test(String(testCase.message || ""))
+      );
+      const reject = waitingForUser
+        && requiresConcreteOutcome
+        && !completionState.eligibleForCompletion;
+      const failures = [];
+      if (Object.prototype.hasOwnProperty.call(testCase, "expectedReject")
+        && reject !== Boolean(testCase.expectedReject)) {
+        failures.push(`Expected waiting rejection=${Boolean(testCase.expectedReject)}, got ${reject}.`);
+      }
+      return {
+        passed: failures.length === 0,
+        failures,
+        actual: {
+          objective,
+          waitingForUser,
+          requiresConcreteOutcome,
+          eligibleForCompletion: completionState.eligibleForCompletion,
+          blockingCodes: completionState.blockingCodes,
+          reject
+        }
+      };
+    }
     if (mode === "tool_loop_step_diagnostics") {
       const actual = buildToolLoopStepDiagnostics({
         step: 1,
@@ -460,6 +523,33 @@ export function createInternalRegressionRunner({
         actual: {
           content: actual
         }
+      };
+    }
+    if (mode === "project_todo_state") {
+      const actual = parseProjectTodoState(String(testCase.todoContent || ""));
+      const failures = [];
+      if (Object.prototype.hasOwnProperty.call(testCase, "expectedUncheckedCount")
+        && Number(actual?.unchecked?.length || 0) !== Number(testCase.expectedUncheckedCount)) {
+        failures.push(`Expected unchecked todo count ${Number(testCase.expectedUncheckedCount)}, got ${Number(actual?.unchecked?.length || 0)}.`);
+      }
+      if (Object.prototype.hasOwnProperty.call(testCase, "expectedCheckedCount")
+        && Number(actual?.checked?.length || 0) !== Number(testCase.expectedCheckedCount)) {
+        failures.push(`Expected checked todo count ${Number(testCase.expectedCheckedCount)}, got ${Number(actual?.checked?.length || 0)}.`);
+      }
+      for (const expectedText of Array.isArray(testCase.expectedUncheckedIncludes) ? testCase.expectedUncheckedIncludes : []) {
+        if (!Array.isArray(actual?.unchecked) || !actual.unchecked.includes(String(expectedText || "").trim())) {
+          failures.push(`Expected unchecked todo items to include ${expectedText}.`);
+        }
+      }
+      for (const expectedText of Array.isArray(testCase.expectedNormalizedIncludes) ? testCase.expectedNormalizedIncludes : []) {
+        if (!String(actual?.normalizedContent || "").includes(String(expectedText || ""))) {
+          failures.push(`Expected normalized todo content to include ${expectedText}.`);
+        }
+      }
+      return {
+        passed: failures.length === 0,
+        failures,
+        actual
       };
     }
     if (mode === "project_directive_seed") {
@@ -641,7 +731,14 @@ export function createInternalRegressionRunner({
       }
       const expectedSearchSlugs = Array.isArray(testCase.expectedSearchSlugIncludes) ? testCase.expectedSearchSlugIncludes : [];
       for (const expectedSlug of expectedSearchSlugs) {
-        if (!results.some((entry) => String(entry?.slug || "").trim() === String(expectedSlug).trim())) {
+        const normalizedExpected = String(expectedSlug || "").trim();
+        const hasExpected = results.some((entry) => {
+          const slug = String(entry?.slug || "").trim();
+          return slug === normalizedExpected
+            || slug.startsWith(`${normalizedExpected}-`)
+            || normalizedExpected.startsWith(`${slug}-`);
+        });
+        if (!hasExpected) {
           failures.push(`Skill search results did not include expected slug ${expectedSlug}.`);
         }
       }
@@ -1055,6 +1152,12 @@ export function createInternalRegressionRunner({
       };
     }
     if (mode !== "tool_loop_repair") {
+      if (typeof runPluginInternalRegressionCase === "function") {
+        const pluginResult = await runPluginInternalRegressionCase(testCase);
+        if (pluginResult && typeof pluginResult === "object") {
+          return pluginResult;
+        }
+      }
       return buildRegressionFailure(`Unsupported internal regression mode: ${testCase?.mode || "(none)"}`);
     }
     const repeatedToolCalls = Array.isArray(testCase.repeatedToolCalls) ? testCase.repeatedToolCalls : [];

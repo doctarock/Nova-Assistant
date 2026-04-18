@@ -255,15 +255,18 @@ export function createMemoryTrustDomain(context = {}) {
     return `${label} (${trustLevel})`;
   }
 
-  function normalizeSourceIdentityRecord(value = {}) {
+  function normalizeSourceIdentityRecord(value = {}, options = {}) {
     const source = value && typeof value === "object" ? value : {};
+    const preserveTrustLevel = options?.preserveTrustLevel === true;
     const kind = String(source.kind || "").trim().toLowerCase();
     if (!kind) {
       return null;
     }
     const normalized = {
       kind,
-      trustLevel: normalizeTrustLevel(source.trustLevel, "unknown")
+      trustLevel: preserveTrustLevel
+        ? normalizeTrustLevel(source.trustLevel, "unknown")
+        : "unknown"
     };
     if (kind === "email") {
       normalized.email = String(source.email || "").trim().toLowerCase();
@@ -870,11 +873,39 @@ export function createMemoryTrustDomain(context = {}) {
     }
   }
 
+  async function appendRepairLesson({
+    timestamp = new Date().toISOString(),
+    taskMessage = "",
+    repeatedCalls = "",
+    repairNote = ""
+  } = {}) {
+    try {
+      const lessonsPath = context.path.join(context.promptFilesRoot, "LOOP-LESSONS.md");
+      const compact = (s, n) => String(s || "").replace(/\s+/g, " ").slice(0, n).trim();
+      const entry = [
+        `## ${timestamp}`,
+        compact(taskMessage, 200) ? `- Task: ${compact(taskMessage, 200)}` : "",
+        compact(repeatedCalls, 300) ? `- Stuck on: ${compact(repeatedCalls, 300)}` : "",
+        repairNote ? `- Repair: ${compact(repairNote, 200)}` : "",
+        ""
+      ].filter(Boolean).join("\n") + "\n";
+      const existing = await context.fs.readFile(lessonsPath, "utf8").catch(() => "");
+      if (!existing.trim()) {
+        await context.fs.writeFile(lessonsPath, `# Loop Repair Lessons\n\nPatterns that caused tool loop repairs. Avoid repeating these.\n\n${entry}`, "utf8");
+      } else {
+        await context.fs.appendFile(lessonsPath, entry, "utf8");
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
   return {
     QUESTION_MAINTENANCE_EXPANSIONS,
     QUESTION_MAINTENANCE_TARGETS,
     appendDailyAssistantMemory,
     appendDailyOperationalMemory,
+    appendRepairLesson,
     appendDailyQuestionLog,
     applyQuestionMaintenanceAnswer,
     assessEmailSourceIdentity,

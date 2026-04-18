@@ -438,7 +438,7 @@ function updateVoiceUi() {
       ? `Question waiting. Say <strong>${escapeHtml(getBotName())}</strong> within <strong>${remainingSeconds}s</strong> to answer by voice.`
       : `Question waiting. Say <strong>${escapeHtml(getBotName())}</strong> to answer by voice.`;
     setVoiceStatus(waitingPrompt);
-    setVoiceMeta(`Question: ${pendingVoiceQuestionText || "Nova is waiting for your direction."}${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
+    setVoiceMeta(`Question: ${pendingVoiceQuestionText || "Nova is waiting for your direction."} | Say "skip question" to remove it.${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
     return;
   }
   if (voiceWakeActive) {
@@ -922,6 +922,17 @@ function buildVoiceSubmissionText() {
   return sanitizeVoiceCaptureText(mergeVoiceTranscript(committed, interim));
 }
 
+function isVoiceSkipWaitingQuestionCommand(text = "") {
+  const normalized = normalizeVoiceCommandText(String(text || ""), { stripThank: true })
+    .toLowerCase()
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^(skip|skip (it|this|that|the|current|next|one)|skip question|skip (this|that|the|current|next|one) question|next question|remove question|remove (this|that|the|current|next|one) question|discard question|discard (this|that|the|current|next|one) question)$/.test(normalized);
+}
+
 function submitVoicePrompt(text) {
   const cleaned = String(text || "").trim();
   if (!cleaned) {
@@ -997,6 +1008,7 @@ function submitVoicePrompt(text) {
 async function submitVoiceFollowUpAnswer(text) {
   const cleaned = String(text || "").trim();
   const taskId = String(pendingVoiceQuestionTaskId || "").trim();
+  const skipCommand = isVoiceSkipWaitingQuestionCommand(cleaned);
   if (!cleaned || !taskId) {
     resetVoiceCapture();
     return;
@@ -1032,24 +1044,43 @@ async function submitVoiceFollowUpAnswer(text) {
       voiceStopRequested = false;
     }
   }
-  setVoiceStatus(`Captured answer: <strong>${escapeHtml(cleaned)}</strong>`);
-  setVoiceMeta("Sending follow-up answer to Nova.");
+  setVoiceStatus(skipCommand
+    ? "Skip command captured. Removing the current waiting question."
+    : `Captured answer: <strong>${escapeHtml(cleaned)}</strong>`);
+  setVoiceMeta(skipCommand
+    ? "Removing follow-up question and loading the next one."
+    : "Sending follow-up answer to Nova.");
   try {
-    const r = await fetch("/api/tasks/answer", {
+    const adminFetch = typeof observerApp.adminFetch === "function"
+      ? observerApp.adminFetch.bind(observerApp)
+      : fetch;
+    const r = await adminFetch(skipCommand ? "/api/tasks/remove" : "/api/tasks/answer", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         taskId,
-        answer: cleaned,
-        sessionId: document.getElementById("sessionId")?.value || "Main"
+        ...(skipCommand
+          ? {}
+          : {
+            answer: cleaned,
+            sessionId: document.getElementById("sessionId")?.value || "Main"
+          })
       })
     });
     const j = await r.json();
-    if (!r.ok || !j.ok) {
-      throw new Error(j.error || "failed to answer task");
+    if (skipCommand && j.code === "task_in_progress") {
+      throw new Error("cannot remove a task that is currently in progress");
     }
-    hintEl.textContent = "Voice answer saved and the task has been re-queued.";
+    if (!r.ok || !j.ok) {
+      throw new Error(j.error || (skipCommand ? "failed to remove task" : "failed to answer task"));
+    }
+    hintEl.textContent = skipCommand
+      ? "Voice command skipped that waiting question."
+      : "Voice answer saved and the task has been re-queued.";
     await loadTaskQueue();
+    if (questionTimeActive && typeof replayWaitingQuestionThroughAvatar === "function") {
+      replayWaitingQuestionThroughAvatar();
+    }
     if (!questionTimeActive && typeof setQuestionTimeActive === "function") {
       setQuestionTimeActive(false);
     }

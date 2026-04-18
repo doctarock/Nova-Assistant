@@ -193,6 +193,9 @@ export function registerObserverConfigRoutes(context = {}) {
         baseUrl: context.localOllamaBaseUrl
       };
       const knownEndpointIds = new Set(Object.keys(serializedEndpoints));
+      const serializedBuiltInBrains = (Array.isArray(nextBrains?.builtIn) ? nextBrains.builtIn : [])
+        .map((entry) => context.serializeBuiltInBrainConfig(entry))
+        .filter(Boolean);
 
       const serializedCustomBrains = (Array.isArray(nextBrains?.custom) ? nextBrains.custom : [])
         .map((entry, index) => context.serializeCustomBrainConfig(entry, index, knownEndpointIds))
@@ -246,6 +249,7 @@ export function registerObserverConfigRoutes(context = {}) {
         brains: {
           ...observerConfig.brains,
           enabledIds,
+          builtIn: serializedBuiltInBrains,
           endpoints: serializedEndpoints,
           assignments,
           custom: serializedCustomBrains
@@ -270,81 +274,6 @@ export function registerObserverConfigRoutes(context = {}) {
       });
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message });
-    }
-  });
-
-  app.get("/api/projects/config", async (req, res) => {
-    try {
-      res.json({
-        ok: true,
-        ...context.buildProjectConfigPayload(),
-        state: await context.buildProjectSystemStatePayload()
-      });
-    } catch (error) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  app.post("/api/projects/config", async (req, res) => {
-    try {
-      const payload = req.body && typeof req.body === "object" ? req.body : {};
-      const nextProjects = payload?.projects && typeof payload.projects === "object" ? payload.projects : {};
-      context.setObserverConfig({
-        ...context.getObserverConfig(),
-        projects: context.normalizeProjectConfigInput(nextProjects)
-      });
-      await context.saveObserverConfig();
-      res.json({
-        ok: true,
-        message: "Project configuration saved.",
-        ...context.buildProjectConfigPayload(),
-        state: await context.buildProjectSystemStatePayload()
-      });
-    } catch (error) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  app.get("/api/projects/state", async (req, res) => {
-    try {
-      res.json({
-        ok: true,
-        state: await context.buildProjectSystemStatePayload()
-      });
-    } catch (error) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  app.get("/api/projects/pipelines", async (req, res) => {
-    try {
-      const limit = Number(req.query.limit || 24);
-      res.json({
-        ok: true,
-        pipelines: await context.listProjectPipelines({ limit })
-      });
-    } catch (error) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  app.get("/api/projects/pipeline", async (req, res) => {
-    try {
-      const taskId = String(req.query.taskId || "").trim();
-      const projectWorkKey = String(req.query.projectWorkKey || "").trim();
-      if (!taskId && !projectWorkKey) {
-        return res.status(400).json({ ok: false, error: "taskId or projectWorkKey is required" });
-      }
-      const pipeline = await context.getProjectPipelineTrace({ taskId, projectWorkKey });
-      if (!pipeline) {
-        return res.status(404).json({ ok: false, error: "project pipeline not found" });
-      }
-      res.json({
-        ok: true,
-        pipeline
-      });
-    } catch (error) {
-      res.status(500).json({ ok: false, error: error.message });
     }
   });
 

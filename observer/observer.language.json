@@ -34,12 +34,17 @@
       "I've {{completionVerb}} {{taskRef}}.",
       "{{taskRef}} is {{completionState}}.",
       "I've {{completionVerb}} {{taskRef}} cleanly.",
-      "{{taskRef}} is {{completionState}} now."
+      "{{taskRef}} is {{completionState}} now.",
+      "That was a {{heavyAdj}} one — {{taskRef}} is {{completionState}} now.",
+      "I've {{completionVerb}} {{taskRef}} — came out {{cleanAdj}}.",
+      "{{taskRef}} is {{completionState}} and came out {{cleanAdj}}."
     ],
     "failedOpeners": [
       "I {{issueVerb}} {{taskRef}}.",
       "{{taskRef}} {{issueTail}}.",
-      "I {{issueVerb}} {{taskRef}} and it {{issueTail}}."
+      "I {{issueVerb}} {{taskRef}} and it {{issueTail}}.",
+      "I {{issueVerb}} {{taskRef}} — it came in {{roughAdj}}.",
+      "{{taskRef}} came in {{roughAdj}} and {{issueTail}}."
     ],
     "failedFallback": [
       "I wasn't able to finish it cleanly.",
@@ -57,7 +62,9 @@
     "escalatedOpeners": [
       "I'm {{escalateVerb}} {{taskRef}} {{escalateTail}}.",
       "{{taskRef}} needs more weight, so I'm {{escalateVerb}} it {{escalateTail}}.",
-      "I'm {{escalateVerb}} {{taskRef}} to a stronger brain."
+      "I'm {{escalateVerb}} {{taskRef}} to a stronger brain.",
+      "{{taskRef}} needs a {{depthAdj}} look, so I'm {{escalateVerb}} it {{escalateTail}}.",
+      "This one needs a {{depthAdj}} pass — I'm {{escalateVerb}} {{taskRef}} {{escalateTail}}."
     ],
     "escalatedDetail": [
       "{{brainLabel}} {{nextTail}}.",
@@ -68,7 +75,9 @@
       "I'm {{workingVerb}} {{taskRef}}.",
       "{{taskRef}} is underway.",
       "I'm {{workingVerb}} {{taskRef}} now.",
-      "I'm still {{workingVerb}} {{taskRef}}."
+      "I'm still {{workingVerb}} {{taskRef}}.",
+      "Running {{steadyAdj}} on {{taskRef}}.",
+      "{{taskRef}} is moving — running {{steadyAdj}}."
     ],
     "inProgressFastDetail": [
       "{{fastDetail}}"
@@ -85,6 +94,39 @@
       "It will go to {{brainLabel}} {{queueTail}}.",
       "{{brainLabel}} will pick it up {{queueTail}}.",
       "I've got {{brainLabel}} lined up for the next pass."
+    ],
+    "waitingOpeners": [
+      "I'm {{holdVerb}} {{taskRef}} — there's a {{blockNoun}}.",
+      "{{taskRef}} is on hold — hit a {{blockNoun}}.",
+      "I've put {{taskRef}} on pause — there's a {{blockNoun}} in the way.",
+      "{{taskRef}} is {{stuckAdj}} on a {{blockNoun}} — I'm {{holdVerb}} it."
+    ],
+    "waitingFallback": [
+      "I'll pick it back up once it clears.",
+      "I'm watching it — I'll move when the {{blockNoun}} lifts.",
+      "Standing by until it's {{clearVerb}}."
+    ],
+    "canceledOpeners": [
+      "I've dropped {{taskRef}}.",
+      "{{taskRef}} is canceled.",
+      "I pulled {{taskRef}} from the line.",
+      "I've cleared {{taskRef}} from the queue."
+    ],
+    "canceledFallback": [
+      "It won't be processed.",
+      "Nothing further will happen with it.",
+      "It's out of the line."
+    ],
+    "startedOpeners": [
+      "I'm {{startVerb}} {{taskRef}}.",
+      "{{startVerb}} {{taskRef}} now.",
+      "I've got {{taskRef}} — {{startVerb}} it now."
+    ],
+    "retryOpeners": [
+      "I'm {{retryVerb}} {{taskRef}}.",
+      "{{taskRef}} is getting another pass.",
+      "Taking a fresh run at {{taskRef}}.",
+      "I'm {{retryVerb}} {{taskRef}} — giving it another shot."
     ]
   }
 }

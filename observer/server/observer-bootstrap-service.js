@@ -19,6 +19,7 @@ function scheduleRepeatingTask(context, intervalMs, message, task) {
 }
 
 export async function initializeObserverRuntime(context = {}) {
+  const deferHeavyInitialization = context?.deferHeavyInitialization === true;
   await context.loadObserverConfig();
   await context.loadVoicePatternStore();
   await context.loadObserverLanguage();
@@ -29,26 +30,36 @@ export async function initializeObserverRuntime(context = {}) {
   await context.loadMailQuarantineLog();
   await context.migrateLegacyPromptWorkspaceIfNeeded();
   await context.ensurePromptWorkspaceScaffolding();
+  if (deferHeavyInitialization) {
+    return;
+  }
+  await runDeferredObserverRuntimeInitialization(context);
+}
+
+export async function runDeferredObserverRuntimeInitialization(context = {}) {
   await context.ensureInitialDocumentIntelligence();
   await context.backfillRecentMaintenanceMemory();
 }
 
 export function startObserverHttpServer(context = {}) {
   const httpServer = context.app.listen(context.port, "127.0.0.1", () => {
-    console.log(`Observer UI listening on http://127.0.0.1:${context.port}`);
-    console.log("Running local CPU intake + Qwen worker runtime");
+    console.log(`[observer] UI listening on http://127.0.0.1:${context.port}`);
+    console.log("[observer] running local intake + worker runtime");
     context.scheduleTaskDispatch(1000);
 
     scheduleDeferredTask(context, 1500, "warmup error", () => context.warmRuntimeBrains());
     scheduleDeferredTask(context, 2000, "sandbox error", () => context.ensureObserverToolContainer());
-    scheduleDeferredTask(context, 2300, "calendar job error", () => context.runCalendarDueEvents());
+    if (typeof context.runDeferredRuntimeInitialization === "function") {
+      scheduleDeferredTask(context, 2100, "deferred runtime initialization error", () => context.runDeferredRuntimeInitialization());
+    }
+    scheduleDeferredTask(context, 2300, "plugin runtime startup hook error", () =>
+      context.runPluginRuntimeHook("runtime:startup", { source: "server_start" })
+    );
     scheduleDeferredTask(context, 2600, "queue storage maintenance error", () => context.runQueueStorageMaintenance());
     scheduleDeferredTask(context, 2800, "internal periodic close error", () => context.closeCompletedInternalPeriodicTasks());
     scheduleDeferredTask(context, 3000, "retention error", () => context.archiveExpiredCompletedTasks());
-    scheduleDeferredTask(context, 4000, "opportunity job error", () => context.ensureOpportunityScanJob());
-    scheduleDeferredTask(context, 4500, "mail watch job error", () => context.ensureAllMailWatchJobs());
     scheduleDeferredTask(context, 5000, "question maintenance job error", () => context.ensureQuestionMaintenanceJob());
-    scheduleDeferredTask(context, 5500, "todo reminder error", () => context.maybeEmitTodoReminder());
+    scheduleDeferredTask(context, 6000, "recreation job error", () => context.ensureRecreationJob());
 
     scheduleRepeatingTask(context, context.modelWarmIntervalMs, "warmup error", () => context.warmRuntimeBrains());
     scheduleRepeatingTask(
@@ -72,49 +83,23 @@ export function startObserverHttpServer(context = {}) {
     scheduleRepeatingTask(
       context,
       15 * 60 * 1000,
-      "opportunity job error",
-      () => context.ensureOpportunityScanJob()
-    );
-    scheduleRepeatingTask(
-      context,
-      15 * 60 * 1000,
-      "mail watch job error",
-      () => context.ensureAllMailWatchJobs()
-    );
-    scheduleRepeatingTask(
-      context,
-      15 * 60 * 1000,
       "question maintenance job error",
       () => context.ensureQuestionMaintenanceJob()
     );
     scheduleRepeatingTask(
       context,
-      context.todoReminderCheckIntervalMs,
-      "todo reminder error",
-      () => context.maybeEmitTodoReminder()
+      15 * 60 * 1000,
+      "recreation job error",
+      () => context.ensureRecreationJob()
     );
-    scheduleRepeatingTask(context, 15000, "calendar job error", () => context.runCalendarDueEvents());
+    scheduleRepeatingTask(context, 5 * 60 * 1000, "plugin runtime 5m hook error", () =>
+      context.runPluginRuntimeHook("runtime:tick:5m")
+    );
 
     setInterval(() => {
       context.tickObserverCronQueue();
     }, 15000);
 
-    const observerConfig = context.getObserverConfig();
-    if (observerConfig.mail.enabled) {
-      scheduleDeferredTask(context, 2500, "mail startup poll error", () => (
-        context.pollActiveMailbox({ emitEvents: false })
-          .then(() => context.reconcileMailWatchWaitingQuestions())
-      ));
-      scheduleRepeatingTask(
-        context,
-        Math.max(5000, Number(observerConfig.mail.pollIntervalMs || 30000)),
-        "mail poll error",
-        () => (
-          context.pollActiveMailbox({ emitEvents: true })
-            .then(() => context.reconcileMailWatchWaitingQuestions())
-        )
-      );
-    }
   });
 
   httpServer.on("error", (error) => {
@@ -128,5 +113,66 @@ export function startObserverHttpServer(context = {}) {
   });
 
   context.broadcast("[observer] local runtime log stream ready");
+
+  // --- Graceful shutdown ---
+  const DRAIN_TIMEOUT_MS = 30_000;
+  const DRAIN_POLL_MS = 1_000;
+  let shuttingDown = false;
+
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`[observer] received ${signal}, starting graceful shutdown`);
+
+    // Close all SSE streams so clients reconnect after restart
+    for (const client of (context.clients || new Set())) {
+      try { client.end(); } catch {}
+    }
+    for (const client of (context.observerEventClients || new Set())) {
+      try { client.end(); } catch {}
+    }
+
+    // Stop accepting new HTTP connections
+    httpServer.close(() => {
+      console.log("[observer] HTTP server closed to new requests");
+    });
+
+    // Wait for in-progress tasks to drain
+    let inProgressCount = 0;
+    try {
+      const tasks = await context.listAllTasks();
+      inProgressCount = Array.isArray(tasks?.inProgress) ? tasks.inProgress.length : 0;
+    } catch {}
+
+    if (inProgressCount > 0) {
+      console.log(`[observer] waiting for ${inProgressCount} in-progress task(s) to drain (max ${DRAIN_TIMEOUT_MS / 1000}s)`);
+      const drainStart = Date.now();
+      while (Date.now() - drainStart < DRAIN_TIMEOUT_MS) {
+        await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+        try {
+          const tasks = await context.listAllTasks();
+          inProgressCount = Array.isArray(tasks?.inProgress) ? tasks.inProgress.length : 0;
+        } catch {
+          inProgressCount = 0;
+        }
+        if (inProgressCount === 0) {
+          break;
+        }
+      }
+    }
+
+    if (inProgressCount > 0) {
+      console.warn(`[observer] shutdown timeout — ${inProgressCount} task(s) still in progress, forcing exit`);
+    } else {
+      console.log("[observer] all tasks drained, exiting cleanly");
+    }
+    process.exit(0);
+  }
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM").catch(() => process.exit(1)));
+  process.on("SIGINT",  () => gracefulShutdown("SIGINT").catch(() => process.exit(1)));
+
   return httpServer;
 }

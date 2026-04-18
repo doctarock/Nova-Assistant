@@ -28,11 +28,15 @@ export function createObserverNativeSupport(context = {}) {
     listAllTasks,
     listCronRunEvents,
     listObserverOutputFiles,
+    os,
     path,
+    queryGpuStatus,
     readVolumeFile,
     resolveObserverOutputPath,
+    runCommand,
     startOfTodayMs,
     summarizeCronTools,
+    weatherConfig,
     writeVolumeText
   } = context;
 
@@ -549,15 +553,222 @@ export function createObserverNativeSupport(context = {}) {
     };
   }
 
+  async function buildScheduledJobsSummary() {
+    const now = Date.now();
+    const sinceMs = now - (7 * 24 * 60 * 60 * 1000);
+    const nativeCronEvents = await listCronRunEvents({ sinceTs: sinceMs, limit: 40 });
+    const { queued, inProgress, done, failed } = await listAllTasks();
+    const lines = [];
+
+    const periodicTasks = [...queued, ...inProgress, ...done, ...failed].filter(
+      (task) => task?.scheduler?.periodic
+    );
+    const seriesSeen = new Map();
+    for (const task of periodicTasks) {
+      const key = String(task.scheduler?.seriesId || task.id);
+      const existing = seriesSeen.get(key);
+      const stamp = Number(task.updatedAt || task.createdAt || 0);
+      if (!existing || stamp > existing.stamp) {
+        seriesSeen.set(key, {
+          stamp,
+          name: task.scheduler?.name || task.codename || key,
+          every: task.scheduler?.every || "",
+          status: task.status
+        });
+      }
+    }
+
+    const cronSummaries = nativeCronEvents
+      .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))
+      .slice(0, 10)
+      .map((event) => {
+        const name = event.name ? String(event.name) : (event.jobId ? formatJobCodename(event.jobId) : "scheduled run");
+        const status = event.status === "ok" ? "completed" : String(event.status || "unknown");
+        const activity = summarizeCronTools(event.summary || event.error || "");
+        const ts = Number(event.ts || 0);
+        const age = ts ? formatTimeForUser(ts) : "";
+        return activity
+          ? `${name}: ${status} at ${age}; ${activity}`
+          : `${name}: ${status}${age ? ` at ${age}` : ""}`;
+      })
+      .filter(Boolean);
+
+    const periodicSeries = [...seriesSeen.values()].sort((a, b) => b.stamp - a.stamp);
+
+    if (!periodicSeries.length && !cronSummaries.length) {
+      lines.push("No scheduled jobs or periodic tasks found.");
+      return lines;
+    }
+
+    lines.push(
+      `I have ${periodicSeries.length} recurring task series and ${cronSummaries.length} recent scheduled run event${cronSummaries.length === 1 ? "" : "s"}.`
+    );
+
+    if (periodicSeries.length) {
+      lines.push("Recurring task series:");
+      for (const series of periodicSeries.slice(0, 8)) {
+        lines.push(`- ${series.name}${series.every ? ` (every ${series.every})` : ""}: last status ${series.status}`);
+      }
+    }
+
+    if (cronSummaries.length) {
+      lines.push("Recent scheduled run events:");
+      for (const summary of cronSummaries.slice(0, 8)) {
+        lines.push(`- ${summary}`);
+      }
+    }
+
+    return lines;
+  }
+
+  async function buildHostSystemStatusSummary() {
+    const lines = [];
+    try {
+      const totalMem = os.totalmem();
+      const freeMem = os.freemem();
+      const usedMem = totalMem - freeMem;
+      const usedPct = ((usedMem / totalMem) * 100).toFixed(1);
+      const loadAvg = os.loadavg();
+      const uptimeH = (os.uptime() / 3600).toFixed(1);
+      const cpus = os.cpus();
+      lines.push(
+        `Host: ${os.hostname()} | ${os.platform()} ${os.arch()} | ${cpus.length} CPU cores (${cpus[0]?.model?.trim() || "unknown"})`
+      );
+      lines.push(
+        `Memory: ${(usedMem / 1e9).toFixed(1)} GB used / ${(totalMem / 1e9).toFixed(1)} GB total (${usedPct}%)`
+      );
+      lines.push(`Load (1m): ${loadAvg[0].toFixed(2)} | Uptime: ${uptimeH}h`);
+    } catch (err) {
+      lines.push(`Host system status unavailable: ${err.message}`);
+    }
+    return lines;
+  }
+
+  async function buildGpuStatusSummary() {
+    const lines = [];
+    try {
+      if (typeof queryGpuStatus !== "function") {
+        lines.push("GPU status tool is not available.");
+        return lines;
+      }
+      const gpu = await queryGpuStatus();
+      if (!gpu.available) {
+        lines.push(`GPU: not available${gpu.error ? ` (${gpu.error})` : ""}.`);
+        return lines;
+      }
+      lines.push(`GPU: ${gpu.name}`);
+      lines.push(`Utilization: ${gpu.utilizationGpu}% | VRAM: ${gpu.memoryUsedMiB} MiB / ${gpu.memoryTotalMiB} MiB | Temp: ${gpu.temperatureC}°C`);
+    } catch (err) {
+      lines.push(`GPU status unavailable: ${err.message}`);
+    }
+    return lines;
+  }
+
+  async function buildRunningProcessesSummary({ filter = null, limit = 12 } = {}) {
+    const lines = [];
+    try {
+      if (typeof runCommand !== "function") {
+        lines.push("Process list tool is not available.");
+        return lines;
+      }
+      const isWindows = os.platform() === "win32";
+      let processes = [];
+      if (isWindows) {
+        const result = await runCommand("tasklist", ["/FO", "CSV", "/NH"], { timeoutMs: 6000 });
+        if (result.code === 0) {
+          processes = result.stdout.split(/\r?\n/).filter(Boolean).slice(0, 60).map((line) => {
+            const parts = line.split('","').map((s) => s.replace(/"/g, "").trim());
+            return { name: parts[0], pid: parts[1], memKb: parseInt(parts[4]?.replace(/[^0-9]/g, "") || "0") };
+          }).filter((p) => p.name).sort((a, b) => b.memKb - a.memKb);
+        }
+      } else {
+        const result = await runCommand("ps", ["aux", "--sort=-%cpu"], { timeoutMs: 5000 });
+        if (result.code === 0) {
+          processes = result.stdout.split(/\r?\n/).slice(1).filter(Boolean).map((line) => {
+            const p = line.trim().split(/\s+/);
+            return { name: p.slice(10).join(" ").slice(0, 60), pid: p[1], cpu: parseFloat(p[2]), mem: parseFloat(p[3]) };
+          });
+        }
+      }
+      const filtered = filter
+        ? processes.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()))
+        : processes;
+      const top = filtered.slice(0, Number(limit) || 12);
+      if (!top.length) {
+        lines.push(filter ? `No processes found matching "${filter}".` : "No process data available.");
+        return lines;
+      }
+      lines.push(`Top ${top.length} processes${filter ? ` matching "${filter}"` : ""}:`);
+      for (const p of top) {
+        if (isWindows) {
+          lines.push(`  ${p.name} (PID ${p.pid}, ${Math.round(p.memKb / 1024)} MB)`);
+        } else {
+          lines.push(`  ${p.name} (CPU ${p.cpu}%, MEM ${p.mem}%)`);
+        }
+      }
+    } catch (err) {
+      lines.push(`Process list unavailable: ${err.message}`);
+    }
+    return lines;
+  }
+
+  async function buildWeatherSummary({ date = "today" } = {}) {
+    const lines = [];
+    try {
+      const apiKey = weatherConfig?.apiKey || process.env.OPEN_WEATHER_API_KEY || "";
+      const location = weatherConfig?.location || process.env.WEATHER_LOCATION || "";
+      if (!apiKey || !location) {
+        lines.push("Weather is not configured. Set OPEN_WEATHER_API_KEY and WEATHER_LOCATION to enable weather forecasts.");
+        return lines;
+      }
+      const geoRes = await fetch(
+        `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(location)}&limit=1&appid=${apiKey}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      const geoData = await geoRes.json();
+      if (!Array.isArray(geoData) || !geoData.length) {
+        lines.push(`Could not find location "${location}" for weather lookup.`);
+        return lines;
+      }
+      const { lat, lon, name, country } = geoData[0];
+      const fcRes = await fetch(
+        `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      const fc = await fcRes.json();
+      const target = new Date();
+      if (date === "tomorrow") target.setDate(target.getDate() + 1);
+      const dayStr = target.toISOString().slice(0, 10);
+      const slots = (fc.list || []).filter((s) => s.dt_txt.startsWith(dayStr));
+      if (!slots.length) {
+        lines.push(`No forecast data available for ${date === "tomorrow" ? "tomorrow" : "today"} in ${name}, ${country}.`);
+        return lines;
+      }
+      const temps = slots.map((s) => s.main.temp);
+      const conditions = [...new Set(slots.map((s) => s.weather[0].description))];
+      const rain = slots.reduce((sum, s) => sum + (s.rain?.["3h"] || 0), 0);
+      lines.push(`${name}, ${country} — ${date === "tomorrow" ? "tomorrow" : "today"}:`);
+      lines.push(`${Math.min(...temps).toFixed(1)}°C – ${Math.max(...temps).toFixed(1)}°C | ${conditions.join(", ")}${rain > 0 ? ` | ${rain.toFixed(1)} mm rain` : ""}`);
+    } catch (err) {
+      lines.push(`Weather lookup failed: ${err.message}`);
+    }
+    return lines;
+  }
+
   return {
     buildCompletionSummary,
     buildDailyBriefingSummary,
     buildFailureSummary,
+    buildGpuStatusSummary,
+    buildHostSystemStatusSummary,
     buildInboxSummary,
     buildMailStatusSummary,
     buildOutputStatusSummary,
     buildQueueStatusSummary,
     buildRecentActivitySummary,
+    buildRunningProcessesSummary,
+    buildScheduledJobsSummary,
+    buildWeatherSummary,
     ensureUniqueOutputPath,
     extractFileReferenceCandidates,
     extractQuotedSegments,

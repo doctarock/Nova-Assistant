@@ -36,7 +36,11 @@ export function createObserverWaitingTaskHandling(context = {}) {
       return false;
     }
     const internalJobType = String(task.internalJobType || "").trim().toLowerCase();
+    const questionCategory = String(task.questionCategory || "").trim().toLowerCase();
     if (["question_maintenance", "mail_watch_question"].includes(internalJobType)) {
+      return false;
+    }
+    if (questionCategory === "permission_rule_approval") {
       return false;
     }
     const lower = question.toLowerCase();
@@ -153,7 +157,7 @@ export function createObserverWaitingTaskHandling(context = {}) {
   }
 
   async function applyEmailTrustDecision(sourceIdentity = {}, trustLevel = "known") {
-    const normalizedSource = normalizeSourceIdentityRecord(sourceIdentity);
+    const normalizedSource = normalizeSourceIdentityRecord(sourceIdentity, { preserveTrustLevel: true });
     if (!normalizedSource || normalizedSource.kind !== "email") {
       return null;
     }
@@ -193,7 +197,7 @@ export function createObserverWaitingTaskHandling(context = {}) {
   }
 
   function buildReplayMailMessageFromTrustTask(task = {}, sourceIdentity = null) {
-    const normalizedSourceIdentity = normalizeSourceIdentityRecord(sourceIdentity || task.sourceIdentity) || {
+    const normalizedSourceIdentity = normalizeSourceIdentityRecord(sourceIdentity || task.sourceIdentity, { preserveTrustLevel: true }) || {
       kind: "email",
       label: String(task?.sourceIdentity?.label || task?.sourceIdentity?.email || "Unknown sender").trim(),
       email: String(task?.sourceIdentity?.email || "").trim().toLowerCase(),
@@ -277,7 +281,7 @@ export function createObserverWaitingTaskHandling(context = {}) {
     if (!decision.action || decision.action === "manual_reply") {
       return resumeWaitingTaskAfterUserAnswer(task, answer, sessionId);
     }
-    const originalSourceIdentity = normalizeSourceIdentityRecord(task.sourceIdentity) || null;
+    const originalSourceIdentity = normalizeSourceIdentityRecord(task.sourceIdentity, { preserveTrustLevel: true }) || null;
     let resolvedSourceIdentity = originalSourceIdentity;
     if (decision.trustLevel) {
       resolvedSourceIdentity = await applyEmailTrustDecision(originalSourceIdentity, decision.trustLevel) || originalSourceIdentity;
@@ -336,6 +340,117 @@ export function createObserverWaitingTaskHandling(context = {}) {
     };
   }
 
+  function parsePermissionApprovalAnswer(answer = "") {
+    const lower = String(answer || "").trim().toLowerCase();
+    if (!lower) {
+      return "";
+    }
+    if (/\b(approve|approved|allow|allowed|yes|yep|yeah|go ahead|go-ahead|run it|do it)\b/.test(lower)) {
+      return "allow";
+    }
+    if (/\b(deny|denied|reject|rejected|block|blocked|no|nope|stop|cancel|do not|don\'t)\b/.test(lower)) {
+      return "deny";
+    }
+    return "";
+  }
+
+  async function handlePermissionApprovalWaitingAnswer(task = {}, answer = "", sessionId = "Main") {
+    const decision = parsePermissionApprovalAnswer(answer);
+    if (!decision) {
+      throw new Error("Please reply with approve or deny so I can continue this task.");
+    }
+    const now = Date.now();
+    const taskMeta = task?.taskMeta && typeof task.taskMeta === "object" ? task.taskMeta : {};
+    const permissionApprovals = taskMeta?.permissionApprovals && typeof taskMeta.permissionApprovals === "object"
+      ? taskMeta.permissionApprovals
+      : {};
+    const pendingApproval = permissionApprovals?.pending && typeof permissionApprovals.pending === "object"
+      ? permissionApprovals.pending
+      : {};
+    const decisionKey = String(pendingApproval.key || "").trim();
+    const decisionScopeKey = String(pendingApproval.scopeKey || "").trim();
+    const decisions = permissionApprovals?.decisions && typeof permissionApprovals.decisions === "object" && !Array.isArray(permissionApprovals.decisions)
+      ? { ...permissionApprovals.decisions }
+      : {};
+    if (decisionKey) {
+      decisions[decisionKey] = decision;
+    }
+    if (decisionScopeKey) {
+      decisions[decisionScopeKey] = decision;
+    }
+    const nextPermissionHistory = [
+      ...(Array.isArray(permissionApprovals.history) ? permissionApprovals.history : []),
+      {
+        type: "decision",
+        at: now,
+        key: decisionKey,
+        scopeKey: decisionScopeKey,
+        ruleId: String(pendingApproval.ruleId || "").trim(),
+        toolName: String(pendingApproval.toolName || "").trim(),
+        decision,
+        answer: compactTaskText(String(answer || "").trim(), 220)
+      }
+    ].slice(-120);
+
+    const questionText = compactTaskText(String(task.questionForUser || "").trim(), 2000);
+    const nextClarificationHistory = [
+      ...(Array.isArray(task.clarificationHistory) ? task.clarificationHistory : []),
+      {
+        askedAt: Number(task.waitingForUserAt || task.updatedAt || task.createdAt || now),
+        answeredAt: now,
+        question: questionText,
+        answer: compactTaskText(String(answer || "").trim(), 1200),
+        sessionId: String(sessionId || "Main").trim()
+      }
+    ];
+    const permissionSummary = [
+      `Permission decision: ${decision === "allow" ? "approved" : "denied"}.`,
+      pendingApproval?.toolName ? `Tool: ${pendingApproval.toolName}.` : "",
+      pendingApproval?.reason ? `Reason: ${compactTaskText(String(pendingApproval.reason || "").trim(), 180)}.` : ""
+    ].filter(Boolean).join(" ");
+    const resumedTask = await persistTaskTransition({
+      previousTask: task,
+      nextTask: {
+        ...task,
+        status: "queued",
+        updatedAt: now,
+        resumedFromQuestionAt: now,
+        resumedBySessionId: String(sessionId || "Main").trim(),
+        originalMessage: String(task.originalMessage || task.message || "").trim(),
+        message: [
+          String(task.originalMessage || task.message || "").trim(),
+          "",
+          `Permission clarification: ${permissionSummary}`
+        ].filter(Boolean).join("\n"),
+        lastUserAnswer: compactTaskText(String(answer || "").trim(), 4000),
+        questionForUser: "",
+        questionCategory: "",
+        answerPending: false,
+        waitingForUserAt: undefined,
+        clarificationHistory: nextClarificationHistory,
+        taskMeta: {
+          ...taskMeta,
+          permissionApprovals: {
+            ...permissionApprovals,
+            pending: null,
+            decisions,
+            history: nextPermissionHistory,
+            updatedAt: now
+          }
+        },
+        notes: compactTaskText(`User answered permission approval question. ${String(task.notes || "").trim()}`.trim(), 260)
+      },
+      eventType: "task.answered",
+      reason: "Permission approval response recorded."
+    });
+    broadcastObserverEvent({
+      type: "task.answered",
+      task: resumedTask
+    });
+    scheduleTaskDispatch();
+    return resumedTask;
+  }
+
   async function answerWaitingTask(taskId = "", answer = "", sessionId = "Main") {
     const normalizedTaskId = String(taskId || "").trim();
     const normalizedAnswer = compactTaskText(String(answer || "").trim(), 4000);
@@ -354,6 +469,9 @@ export function createObserverWaitingTaskHandling(context = {}) {
     }
     if (String(task.internalJobType || "") === "mail_watch_question") {
       return handleMailWatchWaitingAnswer(task, normalizedAnswer, sessionId);
+    }
+    if (String(task.questionCategory || "").trim() === "permission_rule_approval") {
+      return handlePermissionApprovalWaitingAnswer(task, normalizedAnswer, sessionId);
     }
     if (String(task.questionCategory || "").trim() === "source_trust_decision") {
       return handleSourceTrustDecisionWaitingAnswer(task, normalizedAnswer, sessionId);

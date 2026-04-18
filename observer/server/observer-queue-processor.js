@@ -5,6 +5,7 @@ export function createObserverQueueProcessor(context = {}) {
     TASK_PROGRESS_HEARTBEAT_MS,
     TASK_QUEUE_DONE,
     TASK_QUEUE_INBOX,
+    TASK_QUEUE_IN_PROGRESS,
     VISIBLE_COMPLETED_HISTORY_COUNT,
     WORKSPACE_ROOT,
     addTodoItem,
@@ -29,6 +30,7 @@ export function createObserverQueueProcessor(context = {}) {
     executeObserverRun,
     executeOpportunityScanJob,
     executeQuestionMaintenanceJob,
+    executeRecreationJob,
     extractContainerPathCandidates,
     findIndexedTaskById,
     findRecentCronTaskRuns,
@@ -366,6 +368,8 @@ export function createObserverQueueProcessor(context = {}) {
           runResponse = await executeHelperScoutJob(inProgressTask);
         } else if (String(inProgressTask.internalJobType || "") === "escalation_review") {
           runResponse = await executeEscalationReviewJob(inProgressTask);
+        } else if (String(inProgressTask.internalJobType || "") === "agent_recreation") {
+          runResponse = await executeRecreationJob(inProgressTask);
         } else {
           runResponse = await executeObserverRun({
             message: buildQueuedTaskExecutionPrompt(taskPrompt, inProgressTask),
@@ -377,6 +381,13 @@ export function createObserverQueueProcessor(context = {}) {
             preset: "queued-task",
             attachments: [],
             runtimeNotesExtra: taskRuntimeNotes,
+            taskContext: {
+              taskId: String(inProgressTask.id || "").trim(),
+              sessionId: String(inProgressTask.sessionId || "").trim(),
+              taskMeta: inProgressTask.taskMeta && typeof inProgressTask.taskMeta === "object"
+                ? inProgressTask.taskMeta
+                : {}
+            },
             abortSignal: taskAbortController.signal
           });
         }
@@ -405,8 +416,14 @@ export function createObserverQueueProcessor(context = {}) {
         }
         const textSummary = summarizePayloadText(runResponse.parsed);
         const artifactSummary = summarizeRunArtifacts(runResponse);
-        const reviewedSummary = ["opportunity_scan", "mail_watch", "question_maintenance"].includes(String(inProgressTask.internalJobType || ""))
-          ? compactTaskText(textSummary || artifactSummary || runResponse.stderr || runResponse.error || "", 420)
+        const internalJobType = String(inProgressTask.internalJobType || "").trim();
+        const rawInternalSummary = textSummary || artifactSummary || runResponse.stderr || runResponse.error || "";
+        const reviewedSummary = ["opportunity_scan", "mail_watch", "question_maintenance", "agent_recreation"].includes(internalJobType)
+          ? (
+            internalJobType === "agent_recreation"
+              ? rawInternalSummary
+              : compactTaskText(rawInternalSummary, 420)
+          )
           : await buildCompletionReviewSummary({
             task: inProgressTask,
             runResponse,
@@ -443,6 +460,10 @@ export function createObserverQueueProcessor(context = {}) {
           outputFiles: runResponse.outputFiles || [],
           toolLoopDiagnostics: runResponse.toolLoopDiagnostics || undefined,
           malformedResponse: runResponse.malformedResponse || "",
+          initialRawResponse: runResponse.initialRawResponse || "",
+          retryRawResponse: runResponse.retryRawResponse || "",
+          debugRetryRawResponse: runResponse.debugRetryRawResponse || "",
+          finalParseError: runResponse.finalParseError || "",
           model: runResponse.brain?.model || brain.model,
           code: runResponse.code,
           aborted: runResponse.aborted === true,
@@ -607,28 +628,48 @@ export function createObserverQueueProcessor(context = {}) {
           await writeVolumeText(donePath, `${JSON.stringify(finalTask, null, 2)}\n`);
         }
 
-        if (finalTask.scheduler?.periodic && Number(finalTask.scheduler.everyMs || 0) > 0) {
-          await createQueuedTask({
-            message: finalTask.message,
-            sessionId: finalTask.sessionId,
-            requestedBrainId: finalTask.requestedBrainId || "worker",
-            intakeBrainId: finalTask.intakeBrainId || "bitnet",
-            internetEnabled: Boolean(finalTask.internetEnabled),
-            selectedMountIds: Array.isArray(finalTask.mountIds) ? finalTask.mountIds : [],
-            forceToolUse: Boolean(finalTask.forceToolUse),
-            notes: `Requeued from periodic scheduler task "${finalTask.scheduler.name || finalTask.scheduler.seriesId}".`,
-            taskMeta: {
-              ...(finalTask.internalJobType ? { internalJobType: finalTask.internalJobType } : {}),
-              ...(finalTask.opportunityKey ? { opportunityKey: finalTask.opportunityKey } : {}),
-              ...(finalTask.opportunityReason ? { opportunityReason: finalTask.opportunityReason } : {}),
-              ...(finalTask.mailWatchRuleId ? { mailWatchRuleId: finalTask.mailWatchRuleId } : {}),
-              scheduler: {
-                ...finalTask.scheduler,
-                lastCompletedAt: completedAt
-              },
-              notBeforeAt: completedAt + Number(finalTask.scheduler.everyMs || 0)
-            }
-          });
+        let nextScheduler = finalTask.scheduler;
+        let nextMailWatchRuleId = String(finalTask.mailWatchRuleId || "").trim();
+        if (String(finalTask.internalJobType || "").trim().toLowerCase() === "mail_watch") {
+          nextScheduler = null;
+          nextMailWatchRuleId = "";
+        }
+        if (nextScheduler?.periodic && Number(nextScheduler.everyMs || 0) > 0) {
+          const schedulerSeriesId = String(nextScheduler.seriesId || "").trim();
+          let alreadyQueuedForSeries = false;
+          if (schedulerSeriesId) {
+            const [queuedPeriodicTasks, runningPeriodicTasks] = await Promise.all([
+              listTasksByFolder(TASK_QUEUE_INBOX, "queued"),
+              listTasksByFolder(TASK_QUEUE_IN_PROGRESS, "in_progress")
+            ]);
+            alreadyQueuedForSeries = [...queuedPeriodicTasks, ...runningPeriodicTasks].some((entry) =>
+              String(entry.id || "") !== String(finalTask.id || "")
+              && String(entry.scheduler?.seriesId || "").trim() === schedulerSeriesId
+            );
+          }
+          if (!alreadyQueuedForSeries) {
+            await createQueuedTask({
+              message: finalTask.message,
+              sessionId: finalTask.sessionId,
+              requestedBrainId: finalTask.requestedBrainId || "worker",
+              intakeBrainId: finalTask.intakeBrainId || "bitnet",
+              internetEnabled: Boolean(finalTask.internetEnabled),
+              selectedMountIds: Array.isArray(finalTask.mountIds) ? finalTask.mountIds : [],
+              forceToolUse: Boolean(finalTask.forceToolUse),
+              notes: `Requeued from periodic scheduler task "${nextScheduler.name || nextScheduler.seriesId}".`,
+              taskMeta: {
+                ...(finalTask.internalJobType ? { internalJobType: finalTask.internalJobType } : {}),
+                ...(finalTask.opportunityKey ? { opportunityKey: finalTask.opportunityKey } : {}),
+                ...(finalTask.opportunityReason ? { opportunityReason: finalTask.opportunityReason } : {}),
+                ...(nextMailWatchRuleId ? { mailWatchRuleId: nextMailWatchRuleId } : {}),
+                scheduler: {
+                  ...nextScheduler,
+                  lastCompletedAt: completedAt
+                },
+                notBeforeAt: completedAt + Number(nextScheduler.everyMs || 0)
+              }
+            });
+          }
         }
         if (
           runResponse.ok
@@ -658,6 +699,10 @@ export function createObserverQueueProcessor(context = {}) {
           resultSummary: `Task finalization failed: ${error.message || "unknown error"}`,
           outputFiles: Array.isArray(runResponse?.outputFiles) ? runResponse.outputFiles : [],
           malformedResponse: runResponse?.malformedResponse || "",
+          initialRawResponse: runResponse?.initialRawResponse || "",
+          retryRawResponse: runResponse?.retryRawResponse || "",
+          debugRetryRawResponse: runResponse?.debugRetryRawResponse || "",
+          finalParseError: runResponse?.finalParseError || "",
           model: runResponse?.brain?.model || brain.model,
           code: Number.isFinite(runResponse?.code) ? runResponse.code : 1,
           silentInternalSkip: runResponse?.silentInternalSkip === true,

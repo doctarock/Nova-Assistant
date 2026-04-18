@@ -24,8 +24,10 @@ export function createObserverExecutionRunner(context = {}) {
     extractProjectCycleProjectRoot,
     extractTaskDirectiveValue,
     filterDestructiveWriteCallsForInPlaceEdit,
+    formatToolResultForModel,
     getObserverConfig,
     getProjectNoChangeMinimumTargets,
+    getToolResultSemantic,
     isConcreteImplementationInspectionTarget,
     isEchoedToolResultEnvelope,
     isProjectCycleMessage,
@@ -45,7 +47,11 @@ export function createObserverExecutionRunner(context = {}) {
     replanRepeatedToolLoopWithPlanner,
     retryJsonEnvelope,
     runOllamaPrompt,
-    sanitizeSkillSlug
+    buildToolExecutionBatches,
+    sanitizeSkillSlug,
+    appendRepairLesson,
+    OBSERVER_CONTAINER_WORKSPACE_ROOT,
+    loopLessonsHostPath
   } = context;
 
   async function executeObserverRun({
@@ -58,6 +64,7 @@ export function createObserverExecutionRunner(context = {}) {
     preset = "autonomous",
     attachments = [],
     runtimeNotesExtra = [],
+    taskContext = null,
     abortSignal = null
   }) {
     const outputFilesBefore = await listObserverOutputFiles();
@@ -82,6 +89,12 @@ export function createObserverExecutionRunner(context = {}) {
     const inspectedTargets = new Set();
     const toolLoopSignatures = [];
     const toolLoopDiagnostics = createToolLoopDiagnostics();
+    const normalizedTaskContext = taskContext && typeof taskContext === "object"
+      ? taskContext
+      : {};
+    const ollamaLeaseOwnerId = normalizedTaskContext?.taskId
+      ? `task:${String(normalizedTaskContext.taskId).trim()}`
+      : `session:${String(sessionId || "Main").trim() || "Main"}:worker`;
     let currentOutputSnapshotMap = new Map(outputFilesBeforeMap);
     let currentWorkspaceSnapshotMap = new Map(workspaceFilesBeforeMap);
     let consecutiveNoProgressSteps = 0;
@@ -89,6 +102,7 @@ export function createObserverExecutionRunner(context = {}) {
     let emptyFinalResponseCount = 0;
     let invalidConcreteFinalCount = 0;
     let echoedToolResultsCount = 0;
+    let repairContext = null;
     const urlsUsed = [];
     const inspectFirstTarget = extractTaskDirectiveValue(message, "Inspect first:");
     const expectedFirstMove = extractTaskDirectiveValue(message, "Expected first move:");
@@ -108,7 +122,8 @@ export function createObserverExecutionRunner(context = {}) {
       preset,
       preparedAttachmentsFiles: preparedAttachments?.files || [],
       visionImageCount: visionImages.length,
-      runtimeNotesExtra
+      runtimeNotesExtra,
+      internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim()
     });
 
     const rejectOrRetryInvalidConcreteFinal = (stderr, malformedResponse, feedbackLines) => {
@@ -138,6 +153,116 @@ export function createObserverExecutionRunner(context = {}) {
       };
     };
 
+    function buildPermissionApprovalQuestion(permissionApproval = {}) {
+      const toolName = compactTaskText(String(permissionApproval.toolName || "").trim(), 120) || "(unknown tool)";
+      const reason = compactTaskText(String(permissionApproval.reason || "").trim(), 220)
+        || "A permission rule requires your decision before this tool can run.";
+      const ruleId = compactTaskText(String(permissionApproval.ruleId || "").trim(), 120);
+      const command = compactTaskText(String(permissionApproval.command || "").trim(), 220);
+      const targetPath = compactTaskText(String(permissionApproval.path || "").trim(), 200);
+      const targetUrl = compactTaskText(String(permissionApproval.url || "").trim(), 200);
+      const approvalKey = compactTaskText(String(permissionApproval.key || permissionApproval.scopeKey || "").trim(), 120);
+      return [
+        "Permission approval required before I can continue.",
+        `Tool: ${toolName}`,
+        ruleId ? `Rule: ${ruleId}` : "",
+        `Reason: ${reason}`,
+        command ? `Requested command: ${command}` : "",
+        targetPath ? `Target path: ${targetPath}` : "",
+        targetUrl ? `Target URL: ${targetUrl}` : "",
+        approvalKey ? `Approval key: ${approvalKey}` : "",
+        "Reply with exactly one word: approve or deny."
+      ].filter(Boolean).join("\n");
+    }
+
+    function buildPermissionApprovalTaskMetaUpdates(permissionApproval = {}) {
+      const now = Date.now();
+      const existingTaskMeta = normalizedTaskContext?.taskMeta && typeof normalizedTaskContext.taskMeta === "object"
+        ? normalizedTaskContext.taskMeta
+        : {};
+      const existingPermissionApprovals = existingTaskMeta?.permissionApprovals && typeof existingTaskMeta.permissionApprovals === "object"
+        ? existingTaskMeta.permissionApprovals
+        : {};
+      const existingHistory = Array.isArray(existingPermissionApprovals.history)
+        ? existingPermissionApprovals.history
+        : [];
+      const requestEntry = {
+        type: "request",
+        at: now,
+        key: String(permissionApproval.key || "").trim(),
+        scopeKey: String(permissionApproval.scopeKey || "").trim(),
+        ruleId: String(permissionApproval.ruleId || "").trim(),
+        toolName: String(permissionApproval.toolName || "").trim(),
+        reason: compactTaskText(String(permissionApproval.reason || "").trim(), 220)
+      };
+      return {
+        questionCategory: "permission_rule_approval",
+        taskMeta: {
+          ...existingTaskMeta,
+          permissionApprovals: {
+            ...existingPermissionApprovals,
+            pending: {
+              ...permissionApproval,
+              requestedAt: now
+            },
+            history: [...existingHistory, requestEntry].slice(-120),
+            updatedAt: now
+          }
+        }
+      };
+    }
+
+    function buildPermissionApprovalWaitingResponse(permissionApproval = {}) {
+      const questionForUser = compactTaskText(buildPermissionApprovalQuestion(permissionApproval), 1000);
+      const spokenQuestion = annotateNovaSpeechText(
+        questionForUser.replace(/\n+/g, " "),
+        "question"
+      );
+      toolLoopDiagnostics.summary = buildToolLoopSummaryText(toolLoopDiagnostics);
+      return {
+        ok: true,
+        code: 0,
+        timedOut: false,
+        preset,
+        brain,
+        forceToolUse,
+        network: internetEnabled ? "internet" : "local",
+        mounts: allowedMounts.map((mount) => ({
+          id: mount.id,
+          label: mount.label,
+          containerPath: mount.containerPath,
+          mode: mount.mode || "ro"
+        })),
+        attachments: preparedAttachments?.files || [],
+        outputFiles: [],
+        toolLoopDiagnostics: toolLoopDiagnostics.transportSuccessCount > 0 ? toolLoopDiagnostics : undefined,
+        waitingForUser: true,
+        questionForUser,
+        taskMetaUpdates: buildPermissionApprovalTaskMetaUpdates(permissionApproval),
+        parsed: {
+          status: "ok",
+          result: {
+            payloads: [
+              {
+                text: `${spokenQuestion}\n\nTools used: ${executedTools.join(", ") || "none"}\nMounted paths used: ${allowedMounts.map((mount) => mount.containerPath).join(", ") || "none"}`,
+                mediaUrl: null
+              }
+            ],
+            meta: {
+              durationMs: Date.now() - startedAt,
+              agentMeta: {
+                sessionId,
+                provider: "ollama",
+                model: brain.model
+              }
+            }
+          }
+        },
+        stdout: questionForUser,
+        stderr: ""
+      };
+    }
+
     for (let step = 0; step < 8; step += 1) {
       if (abortSignal?.aborted) {
         return {
@@ -163,7 +288,14 @@ export function createObserverExecutionRunner(context = {}) {
       const result = await runOllamaPrompt(
         brain.model,
         `${systemPrompt}${toolHistory}\n\nUser request:\n${message}`,
-        { signal: abortSignal, baseUrl: brain.ollamaBaseUrl, images: visionImages }
+        {
+          signal: abortSignal,
+          baseUrl: brain.ollamaBaseUrl,
+          images: visionImages,
+          brainId: brain.id,
+          leaseOwnerId: ollamaLeaseOwnerId,
+          leaseWaitMs: 15000
+        }
       );
       if (!result.ok) {
         return {
@@ -188,37 +320,53 @@ export function createObserverExecutionRunner(context = {}) {
       try {
         decision = extractJsonObject(result.text);
       } catch (error) {
+        const initialRawResponse = String(result.text || "").slice(0, 12000);
+        const initialParseError = String(error?.message || "unknown parse error").trim() || "unknown parse error";
         const retried = await retryJsonEnvelope(
           brain.model,
           result.text,
           "Use one of these exact envelopes: {\"assistant_message\":\"...\",\"tool_calls\":[...],\"final\":false} or {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"final\":true}.",
-          { baseUrl: brain.ollamaBaseUrl }
+          {
+            baseUrl: brain.ollamaBaseUrl,
+            brainId: brain.id,
+            leaseOwnerId: ollamaLeaseOwnerId,
+            leaseWaitMs: 2500
+          }
         );
         let debugRetried = { ok: false, text: "", error: "" };
+        let retryParseError = "";
+        let debugRetryParseError = "";
         if (retried.ok) {
           try {
             decision = extractJsonObject(retried.text);
-          } catch {
+          } catch (retryError) {
             decision = null;
+            retryParseError = String(retryError?.message || "").trim();
           }
         }
         if (!decision) {
           debugRetried = await debugJsonEnvelopeWithPlanner({
             model: brain.model,
             rawText: retried.ok ? retried.text : result.text,
-            parseError: error.message,
+            parseError: retryParseError || initialParseError,
             schemaHint: "Use one of these exact envelopes: {\"assistant_message\":\"...\",\"tool_calls\":[...],\"final\":false} or {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"final\":true}.",
-            baseUrl: brain.ollamaBaseUrl
+            baseUrl: brain.ollamaBaseUrl,
+            leaseOwnerId: ollamaLeaseOwnerId
           });
           if (debugRetried.ok) {
             try {
               decision = extractJsonObject(debugRetried.text);
-            } catch {
+            } catch (debugRetryError) {
               decision = null;
+              debugRetryParseError = String(debugRetryError?.message || "").trim();
             }
           }
         }
         if (!decision) {
+          const retryRawResponse = retried.ok ? String(retried.text || "").slice(0, 12000) : "";
+          const debugRetryRawResponse = debugRetried.ok ? String(debugRetried.text || "").slice(0, 12000) : "";
+          const latestMalformedResponse = debugRetryRawResponse || retryRawResponse || initialRawResponse;
+          const finalParseError = debugRetryParseError || retryParseError || initialParseError;
           return {
             ok: false,
             code: 0,
@@ -232,8 +380,12 @@ export function createObserverExecutionRunner(context = {}) {
             outputFiles: [],
             parsed: null,
             stdout: result.text || "",
-            stderr: `worker returned invalid JSON: ${error.message}`,
-            malformedResponse: String((debugRetried.ok ? debugRetried.text : retried.ok ? retried.text : result.text) || "").slice(0, 12000)
+            stderr: `worker returned invalid JSON: ${finalParseError}`,
+            malformedResponse: latestMalformedResponse,
+            initialRawResponse,
+            retryRawResponse,
+            debugRetryRawResponse,
+            finalParseError
           };
         }
       }
@@ -307,7 +459,7 @@ export function createObserverExecutionRunner(context = {}) {
         const waitingQuestionMatch = finalText.match(/^\s*QUESTION FOR USER:\s*(.+)$/is);
         const waitingQuestion = compactTaskText(String(waitingQuestionMatch?.[1] || "").trim(), 1000);
         const spokenFinalText = annotateNovaSpeechText(finalText, "reply");
-        if (looksLikeCapabilityRefusalCompletionSummary(finalText)) {
+        if (preset !== "internal-recreation" && looksLikeCapabilityRefusalCompletionSummary(finalText)) {
           const retry = rejectOrRetryInvalidConcreteFinal(
             "worker ended with a capability refusal instead of using skill recovery",
             finalText,
@@ -355,6 +507,7 @@ export function createObserverExecutionRunner(context = {}) {
         const hasConcreteFileChange = completionState.hasConcreteFileChange;
         const hasConcreteImplementationInspection = completionState.hasConcreteImplementationInspection;
         const changedConcreteProjectFiles = completionState.changedConcreteProjectFiles;
+        const changedImplementationProjectFiles = completionState.changedImplementationProjectFiles;
         const changedProjectTodo = completionState.changedProjectTodo;
         const inspectedExpectedFirstTarget = completionState.inspectedExpectedFirstTarget;
         const hasNoChangeConclusion = completionState.hasNoChangeConclusion;
@@ -368,6 +521,21 @@ export function createObserverExecutionRunner(context = {}) {
               [
                 "Your previous final_text asked the user a question before grounded inspection.",
                 "Inspect the named files or resources first, try a safe repair if possible, and only then ask one focused question if user direction is still required."
+              ]
+            );
+            if (retry) {
+              return retry;
+            }
+            continue;
+          }
+          if (isProjectCycleTask && requiresConcreteOutcome && !completionState.eligibleForCompletion) {
+            const retry = rejectOrRetryInvalidConcreteFinal(
+              "worker tried to park a project-cycle task in waiting_for_user before satisfying completion policy",
+              finalText,
+              [
+                "Your previous final_text was rejected because project-cycle work cannot switch to waiting_for_user before the completion policy is satisfied.",
+                "Do not ask the user a question as a substitute for the required concrete outcome.",
+                "Keep working until you either make the required concrete change and update PROJECT-TODO.md, or provide a valid no-change conclusion with the inspected paths."
               ]
             );
             if (retry) {
@@ -419,7 +587,7 @@ export function createObserverExecutionRunner(context = {}) {
             stderr: ""
           };
         }
-        if (requiresConcreteOutcome && soundsSpeculative) {
+        if (preset !== "internal-recreation" && requiresConcreteOutcome && soundsSpeculative) {
           const retry = rejectOrRetryInvalidConcreteFinal(
             "worker claimed completion using speculative or future-tense language",
             finalText,
@@ -434,7 +602,55 @@ export function createObserverExecutionRunner(context = {}) {
           }
           continue;
         }
-        if (requiresConcreteOutcome && !usedInspectionTool && !hasConcreteFileChange) {
+        if (preset !== "internal-recreation" && requiresConcreteOutcome && !usedInspectionTool && !hasConcreteFileChange) {
+          const forcedInspectionTarget = inspectFirstTarget || (projectRootTargets.length ? projectRootTargets[0] : "");
+          if (isProjectCycleTask && forcedInspectionTarget && invalidConcreteFinalCount === 0) {
+            try {
+              const forcedCallId = `forced_inspection_${Date.now()}`;
+              const forcedCall = normalizeToolCallRecord({
+                id: forcedCallId,
+                type: "function",
+                function: { name: "read_document", arguments: JSON.stringify({ path: forcedInspectionTarget }) }
+              }, 0);
+              const forcedResult = await executeWorkerToolCall(forcedCall, { internetEnabled, taskContext: normalizedTaskContext });
+              const forcedSemanticOk = isSemanticallySuccessfulToolResult("read_document", forcedResult);
+              if (forcedSemanticOk && forcedResult) {
+                const formatted = formatToolResultForModel(
+                  "read_document",
+                  { path: forcedInspectionTarget },
+                  String(forcedResult?.stdout || forcedResult?.result || JSON.stringify(forcedResult) || "")
+                );
+                const compressedForcedResult = { ...forcedResult, __modelFormat: formatted.modelFormat, __density: formatted.density, __findings: formatted.findings };
+                inspectedTargets.add(forcedInspectionTarget);
+                successfulToolNames.push("read_document");
+                transcript.push({
+                  role: "assistant",
+                  assistant_message: "Previous response rejected: no inspection tools were called. Running the required first inspection now before allowing a final answer."
+                });
+                transcript.push({
+                  role: "assistant",
+                  assistant_message: "Reading the required first inspection target.",
+                  tool_calls: [forcedCall]
+                });
+                transcript.push({
+                  role: "tool",
+                  tool_results: [{
+                    tool_call_id: forcedCallId,
+                    name: "read_document",
+                    ok: true,
+                    result: compressedForcedResult
+                  }]
+                });
+                transcript.push({
+                  role: "assistant",
+                  assistant_message: `File content retrieved. Review the content above, then decide whether to edit the file or inspect additional targets. Do not return final=true until you have made a concrete change or verified no change is possible after inspecting at least ${minimumConcreteTargets} distinct concrete targets.`
+                });
+                continue;
+              }
+            } catch {
+              // Forced injection failed — fall through to standard rejection
+            }
+          }
           const missingInspectionGuidance = [];
           if (expectedFirstMove) {
             missingInspectionGuidance.push(`Start with this exact first move: ${expectedFirstMove}`);
@@ -548,6 +764,27 @@ export function createObserverExecutionRunner(context = {}) {
           }
           continue;
         }
+        if (
+          isProjectCycleTask
+          && completionState.requiresNonDocumentationArtifact
+          && !hasNoChangeConclusion
+          && changedConcreteProjectFiles.length
+          && !changedImplementationProjectFiles.length
+        ) {
+          const retry = rejectOrRetryInvalidConcreteFinal(
+            "worker attempted project-cycle finalization with documentation-only changes for an implementation objective",
+            finalText,
+            [
+              "Your previous final_text was rejected because the objective pointed at implementation work, but only documentation or planning files changed.",
+              `Objective: ${objectiveText || "make one concrete improvement"}.`,
+              "Change at least one concrete implementation file that matches the objective, not only README.md, directive.md, or project tracking documents."
+            ]
+          );
+          if (retry) {
+            return retry;
+          }
+          continue;
+        }
         if (isProjectCycleTask && objectiveRequiresConcreteImprovement(objectiveText) && !hasNoChangeConclusion && projectTodoPath && !changedProjectTodo) {
           const retry = rejectOrRetryInvalidConcreteFinal(
             "worker attempted project-cycle finalization before satisfying completion policy: PROJECT-TODO.md was not updated",
@@ -580,6 +817,9 @@ export function createObserverExecutionRunner(context = {}) {
         }
         invalidConcreteFinalCount = 0;
         toolLoopDiagnostics.summary = buildToolLoopSummaryText(toolLoopDiagnostics);
+        if (repairContext && typeof appendRepairLesson === "function") {
+          appendRepairLesson(repairContext).catch(() => {});
+        }
         return {
           ok: true,
           code: 0,
@@ -636,7 +876,8 @@ export function createObserverExecutionRunner(context = {}) {
           repeatedToolCallSignature: toolCallSignature,
           executedTools,
           inspectedTargets: [...inspectedTargets],
-          baseUrl: brain.ollamaBaseUrl
+          baseUrl: brain.ollamaBaseUrl,
+          leaseOwnerId: ollamaLeaseOwnerId
         });
         if (!replanned.ok || !replanned.decision) {
           return {
@@ -683,9 +924,30 @@ export function createObserverExecutionRunner(context = {}) {
             malformedResponse: compactTaskText(replannedSignature, 4000)
           };
         }
+        const repeatedCallNames = (() => {
+          try {
+            return JSON.parse(toolCallSignature).map((c) => String(c?.name || "")).filter(Boolean).join(", ");
+          } catch {
+            return String(toolCallSignature).slice(0, 120);
+          }
+        })();
+        repairContext = {
+          timestamp: new Date().toISOString(),
+          taskMessage: message,
+          repeatedCalls: repeatedCallNames,
+          repairNote: String(replanned.decision?.assistant_message || "").slice(0, 200).trim()
+        };
+        const containerLessonsPath = OBSERVER_CONTAINER_WORKSPACE_ROOT
+          ? `${OBSERVER_CONTAINER_WORKSPACE_ROOT}/prompt-files/LOOP-LESSONS.md`
+          : "";
         transcript.push({
           role: "assistant",
-          assistant_message: "Loop repair replaced the repeated tool plan with one new next move."
+          assistant_message: [
+            "Loop repair replaced the repeated tool plan with one new next move.",
+            containerLessonsPath
+              ? `Before marking final, append a one-line lesson to ${containerLessonsPath} describing the pattern that caused the loop and how to avoid it. Format: "- [what you were stuck doing] → [what broke the loop]".`
+              : ""
+          ].filter(Boolean).join(" ")
         });
       }
       if (repeatedSignatureCount >= 3) {
@@ -713,78 +975,228 @@ export function createObserverExecutionRunner(context = {}) {
       const stepInspectionTargets = [];
       const stepNewInspectionTargets = [];
       const stepNewConcreteInspectionTargets = [];
-      for (const toolCall of toolCalls.slice(0, 6)) {
+
+      async function runWithConcurrency(items = [], limit = 1, worker = null) {
+        const list = Array.isArray(items) ? items : [];
+        if (!list.length) {
+          return [];
+        }
+        const maxConcurrency = Math.max(1, Math.min(Number(limit || 1), list.length));
+        if (maxConcurrency <= 1) {
+          const sequential = [];
+          for (const item of list) {
+            sequential.push(await worker(item));
+          }
+          return sequential;
+        }
+        const results = new Array(list.length);
+        let cursor = 0;
+        async function consume() {
+          while (true) {
+            const index = cursor;
+            cursor += 1;
+            if (index >= list.length) {
+              return;
+            }
+            results[index] = await worker(list[index]);
+          }
+        }
+        await Promise.all(Array.from({ length: maxConcurrency }, () => consume()));
+        return results;
+      }
+
+      function applyToolOutcome(outcome = {}) {
+        const name = String(outcome.name || "").trim();
+        if (!name) {
+          return;
+        }
+        if (outcome.transportOk) {
+          transportSuccessfulToolCount += 1;
+          executedTools.push(name);
+        }
+        if (name === "web_fetch" && outcome.parsedArgs?.url) {
+          urlsUsed.push(String(outcome.parsedArgs.url));
+        }
+        if (outcome.inspectionTargetKey && ["list_files", "read_document", "read_file", "shell_command", "web_fetch"].includes(name)) {
+          stepInspectionTargets.push(outcome.inspectionTargetKey);
+          const wasAlreadyInspected = inspectedTargets.has(outcome.inspectionTargetKey);
+          inspectedTargets.add(outcome.inspectionTargetKey);
+          if (!wasAlreadyInspected) {
+            stepNewInspectionTargets.push(outcome.inspectionTargetKey);
+            if (isConcreteImplementationInspectionTarget(outcome.inspectionTargetKey, { projectRoots: projectRootTargets })) {
+              stepNewConcreteInspectionTargets.push(outcome.inspectionTargetKey);
+            }
+          }
+        }
+        if (outcome.semanticOk && name === "request_tool_addition") {
+          const requestedTool = compactTaskText(String(outcome.toolResult?.requestedTool || "").replace(/\s+/g, " ").trim(), 120);
+          if (requestedTool && !toolLoopDiagnostics.requestedTools.includes(requestedTool)) {
+            toolLoopDiagnostics.requestedTools.push(requestedTool);
+          }
+        }
+        if (outcome.semanticOk && name === "request_skill_installation") {
+          const requestedSkill = sanitizeSkillSlug(outcome.toolResult?.slug || "");
+          if (requestedSkill && !toolLoopDiagnostics.requestedSkills.includes(requestedSkill)) {
+            toolLoopDiagnostics.requestedSkills.push(requestedSkill);
+          }
+        }
+        toolResults.push({
+          tool_call_id: String(outcome.toolCall?.id || `call_${toolResults.length + 1}`),
+          name,
+          ok: Boolean(outcome.semanticOk),
+          result: outcome.semanticOk ? outcome.compressedResult : undefined,
+          error: outcome.semanticOk ? undefined : String(outcome.error || "")
+        });
+        if (outcome.semanticOk) {
+          successfulToolNames.push(name);
+          semanticSuccessfulToolCount += 1;
+        }
+      }
+
+      async function executeSingleToolCall(toolCall) {
         if (abortSignal?.aborted) {
-          return {
-            ok: false,
-            code: 499,
-            timedOut: false,
-            preset,
-            brain,
-            forceToolUse,
-            network: internetEnabled ? "internet" : "local",
-            mounts: allowedMounts,
-            attachments: preparedAttachments?.files || [],
-            outputFiles: [],
-            parsed: null,
-            stdout: "",
-            stderr: "task aborted by user",
-            aborted: true
-          };
+          return { aborted: true };
         }
         const rawName = String(toolCall?.function?.name || "").trim();
         const name = normalizeToolName(rawName) || rawName;
+        const parsedArgs = parseToolCallArgs(toolCall);
         try {
-          const toolResult = await executeWorkerToolCall(toolCall, { internetEnabled });
-          transportSuccessfulToolCount += 1;
-          executedTools.push(name);
-          const parsedArgs = parseToolCallArgs(toolCall);
-          if (name === "web_fetch" && parsedArgs.url) {
-            urlsUsed.push(String(parsedArgs.url));
-          }
+          const toolResult = await executeWorkerToolCall(toolCall, {
+            internetEnabled,
+            taskContext: normalizedTaskContext
+          });
           const semanticOk = isSemanticallySuccessfulToolResult(name, toolResult);
           const inspectionTargetKey = semanticOk ? extractInspectionTargetKey(name, parsedArgs) : "";
-          if (inspectionTargetKey && ["list_files", "read_document", "read_file", "shell_command", "web_fetch"].includes(name)) {
-            stepInspectionTargets.push(inspectionTargetKey);
-            const wasAlreadyInspected = inspectedTargets.has(inspectionTargetKey);
-            inspectedTargets.add(inspectionTargetKey);
-            if (!wasAlreadyInspected) {
-              stepNewInspectionTargets.push(inspectionTargetKey);
-              if (isConcreteImplementationInspectionTarget(inspectionTargetKey, { projectRoots: projectRootTargets })) {
-                stepNewConcreteInspectionTargets.push(inspectionTargetKey);
-              }
-            }
+
+          let compressedResult = toolResult;
+          let semanticError = "";
+          if (semanticOk && toolResult) {
+            const formatted = formatToolResultForModel(
+              name,
+              toolCall.function?.arguments || {},
+              String(toolResult?.stdout || toolResult?.result || JSON.stringify(toolResult) || "")
+            );
+            compressedResult = {
+              ...toolResult,
+              __modelFormat: formatted.modelFormat,
+              __density: formatted.density,
+              __findings: formatted.findings
+            };
+          } else if (!semanticOk) {
+            semanticError = buildToolSemanticFailureMessage(name, toolResult);
           }
-          if (semanticOk && name === "request_tool_addition") {
-            const requestedTool = compactTaskText(String(toolResult?.requestedTool || "").replace(/\s+/g, " ").trim(), 120);
-            if (requestedTool && !toolLoopDiagnostics.requestedTools.includes(requestedTool)) {
-              toolLoopDiagnostics.requestedTools.push(requestedTool);
-            }
-          }
-          if (semanticOk && name === "request_skill_installation") {
-            const requestedSkill = sanitizeSkillSlug(toolResult?.slug || "");
-            if (requestedSkill && !toolLoopDiagnostics.requestedSkills.includes(requestedSkill)) {
-              toolLoopDiagnostics.requestedSkills.push(requestedSkill);
-            }
-          }
-          toolResults.push({
-            tool_call_id: String(toolCall.id || `call_${toolResults.length + 1}`),
+
+          return {
+            toolCall,
             name,
-            ok: semanticOk,
-            result: semanticOk ? toolResult : undefined,
-            error: semanticOk ? undefined : buildToolSemanticFailureMessage(name, toolResult)
-          });
-          if (semanticOk) {
-            successfulToolNames.push(name);
-            semanticSuccessfulToolCount += 1;
-          }
+            parsedArgs,
+            transportOk: true,
+            semanticOk,
+            toolResult,
+            compressedResult,
+            inspectionTargetKey,
+            error: semanticError
+          };
         } catch (error) {
-          toolResults.push({
-            tool_call_id: String(toolCall.id || `call_${toolResults.length + 1}`),
+          const permissionApprovalRequired = error?.permissionApprovalRequired === true
+            || String(error?.code || "").trim() === "permission_requires_user_approval";
+          if (permissionApprovalRequired) {
+            return {
+              toolCall,
+              name,
+              parsedArgs,
+              transportOk: false,
+              semanticOk: false,
+              toolResult: null,
+              compressedResult: null,
+              inspectionTargetKey: "",
+              requiresUserApproval: true,
+              permissionApproval: error?.permissionApproval && typeof error.permissionApproval === "object"
+                ? { ...error.permissionApproval, toolName: name }
+                : { toolName: name, reason: String(error?.message || "").trim() }
+            };
+          }
+          return {
+            toolCall,
             name,
-            ok: false,
-            error: error.message
-          });
+            parsedArgs,
+            transportOk: false,
+            semanticOk: false,
+            toolResult: null,
+            compressedResult: null,
+            inspectionTargetKey: "",
+            error: String(error?.message || error || "tool call failed")
+          };
+        }
+      }
+
+      const stepToolCalls = toolCalls.slice(0, 6);
+      const rawBatches = typeof buildToolExecutionBatches === "function"
+        ? await buildToolExecutionBatches({ toolCalls: stepToolCalls })
+        : [];
+      const executionBatches = Array.isArray(rawBatches) && rawBatches.length
+        ? rawBatches
+        : [{ mode: "serial", concurrency: 1, toolCalls: stepToolCalls }];
+
+      for (const batch of executionBatches) {
+        const batchToolCalls = Array.isArray(batch?.toolCalls) ? batch.toolCalls.filter(Boolean) : [];
+        if (!batchToolCalls.length) {
+          continue;
+        }
+        const mode = String(batch?.mode || "serial").trim().toLowerCase();
+        if (mode === "parallel") {
+          const concurrency = Math.max(1, Math.min(Number(batch?.concurrency || batchToolCalls.length), 6));
+          const outcomes = await runWithConcurrency(batchToolCalls, concurrency, executeSingleToolCall);
+          for (const outcome of outcomes) {
+            if (outcome?.aborted) {
+              return {
+                ok: false,
+                code: 499,
+                timedOut: false,
+                preset,
+                brain,
+                forceToolUse,
+                network: internetEnabled ? "internet" : "local",
+                mounts: allowedMounts,
+                attachments: preparedAttachments?.files || [],
+                outputFiles: [],
+                parsed: null,
+                stdout: "",
+                stderr: "task aborted by user",
+                aborted: true
+              };
+            }
+            if (outcome?.requiresUserApproval) {
+              return buildPermissionApprovalWaitingResponse(outcome.permissionApproval || {});
+            }
+            applyToolOutcome(outcome);
+          }
+          continue;
+        }
+        for (const toolCall of batchToolCalls) {
+          const outcome = await executeSingleToolCall(toolCall);
+          if (outcome?.aborted) {
+            return {
+              ok: false,
+              code: 499,
+              timedOut: false,
+              preset,
+              brain,
+              forceToolUse,
+              network: internetEnabled ? "internet" : "local",
+              mounts: allowedMounts,
+              attachments: preparedAttachments?.files || [],
+              outputFiles: [],
+              parsed: null,
+              stdout: "",
+              stderr: "task aborted by user",
+              aborted: true
+            };
+          }
+          if (outcome?.requiresUserApproval) {
+            return buildPermissionApprovalWaitingResponse(outcome.permissionApproval || {});
+          }
+          applyToolOutcome(outcome);
         }
       }
       const outputSnapshot = await listObserverOutputFiles();

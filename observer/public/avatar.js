@@ -84,7 +84,7 @@ const state = {
   renderer: null,
   scene: null,
   camera: null,
-  clock: new THREE.Clock(),
+  timer: new THREE.Timer(),
   mixer: null,
   model: null,
   actions: new Map(),
@@ -740,8 +740,9 @@ function prepareResponseText(text) {
 
 function animate() {
   requestAnimationFrame(animate);
+  state.timer.update();
   if (state.mixer) {
-    state.mixer.update(state.clock.getDelta());
+    state.mixer.update(state.timer.getDelta());
   }
   if (state.skyDome && state.camera) {
     state.skyDome.position.copy(state.camera.position);
@@ -894,6 +895,7 @@ async function loadSavedAppAppearance() {
 async function init() {
   if (!canvas) return;
 
+  state.timer.connect(document);
   state.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
   state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   state.renderer.setClearColor(0xe2c6b7, 1);

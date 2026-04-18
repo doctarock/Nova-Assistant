@@ -5,29 +5,24 @@ export const OBSERVER_INTAKE_TOOLS = [
   { name: "update_prompt_memory_file", description: "Update a prompt-memory file directly. Allowed files: USER.md, MEMORY.md, PERSONAL.md, TODAY.md.", parameters: { file: "string", content: "string", mode: "replace|append" } },
   { name: "get_queue_status", description: "Get a summary of queued and in-progress tasks." },
   { name: "get_recent_activity", description: "Get a summary of recent observer activity." },
-  { name: "get_mail_status", description: "Get mailbox availability and last mail check status." },
-  { name: "get_inbox_summary", description: "Get a summary of current non-spam inbox emails." },
-  { name: "get_today_inbox_summary", description: "Get a summary of today's non-spam inbox emails." },
-  { name: "send_mail", description: "Send an email to a direct address using toEmail, plus subject and text." },
-  { name: "move_mail", description: "Move a recent inbox email to trash or archive using destination plus one of messageId, uid, subjectContains, fromContains, or latest." },
   { name: "get_output_status", description: "Get a summary of files in observer-output." },
   { name: "get_completion_summary", description: "Get a summary of recent completed tasks." },
   { name: "get_failure_summary", description: "Get a summary of recent failed tasks." },
   { name: "get_document_overview", description: "Get a summary of indexed workspace documents and the highest-priority items." },
   { name: "search_documents", description: "Search indexed documents semantically or lexically for a query.", parameters: { query: "string" } },
   { name: "get_daily_briefing", description: "Get the current daily briefing assembled from documents, activity, and task state." },
-  { name: "get_calendar_summary", description: "Get a summary of calendar events for today, tomorrow, this week, or upcoming events.", parameters: { scope: "today|tomorrow|week|upcoming", limit: "number" } },
-  { name: "find_calendar_events", description: "Find calendar events by id, partial title, date (YYYY-MM-DD), or status.", parameters: { eventId: "string", titleContains: "string", date: "YYYY-MM-DD", status: "active|completed|cancelled" } },
-  { name: "create_calendar_event", description: "Create a calendar event, optionally repeating and optionally configured as a Nova action.", parameters: { title: "string", startAt: "ISO datetime", endAt: "ISO datetime", allDay: "boolean", location: "string", description: "string", type: "personal|nova_action", repeatFrequency: "none|daily|weekly|monthly|yearly", repeatInterval: "number", actionEnabled: "boolean", actionMessage: "string", requestedBrainId: "string" } },
-  { name: "update_calendar_event", description: "Update an existing calendar event by eventId or by matching titleContains plus optional date.", parameters: { eventId: "string", titleContains: "string", date: "YYYY-MM-DD", title: "string", startAt: "ISO datetime", endAt: "ISO datetime", allDay: "boolean", location: "string", description: "string", type: "personal|nova_action", repeatFrequency: "none|daily|weekly|monthly|yearly", repeatInterval: "number", actionEnabled: "boolean", actionMessage: "string", requestedBrainId: "string" } },
-  { name: "remove_calendar_event", description: "Remove a calendar event by eventId or by matching titleContains plus optional date.", parameters: { eventId: "string", titleContains: "string", date: "YYYY-MM-DD" } },
-  { name: "set_calendar_event_state", description: "Mark a calendar event active, completed, or cancelled by eventId or matching titleContains plus optional date.", parameters: { eventId: "string", titleContains: "string", date: "YYYY-MM-DD", status: "active|completed|cancelled" } },
   { name: "search_skill_library", description: "Search the OpenClaw skill library for relevant tools or skills.", parameters: { query: "string", limit: "number" } },
   { name: "inspect_skill_library", description: "Inspect a specific OpenClaw skill by slug before deciding to install it.", parameters: { slug: "string" } },
   { name: "install_skill", description: "Request installation of an OpenClaw skill. This requires explicit user approval and should not be used autonomously.", parameters: { slug: "string" } },
   { name: "request_skill_installation", description: "Record a request to install an OpenClaw skill later when autonomous approval is not allowed.", parameters: { slug: "string", reason: "string", skillName: "string", taskSummary: "string" } },
   { name: "request_tool_addition", description: "Record a request for a missing built-in tool or capability discovered during work.", parameters: { requestedTool: "string", reason: "string", skillSlug: "string", skillName: "string", taskSummary: "string" } },
-  { name: "list_installed_skills", description: "List OpenClaw skills already installed in the observer sandbox workspace." }
+  { name: "list_installed_skills", description: "List OpenClaw skills already installed in the observer sandbox workspace." },
+  { name: "get_scheduled_jobs", description: "Get a summary of scheduled jobs, recurring tasks, and recent cron run events." },
+  { name: "get_system_status", description: "Get the current system health status: which plugins are loaded and enabled." },
+  { name: "get_host_system_status", description: "Get host machine system stats: CPU load, memory usage, uptime, platform. Use for questions about RAM, system health, or machine load." },
+  { name: "get_gpu_status", description: "Get GPU utilization, VRAM usage, and temperature from the host machine. Use for questions about the GPU, VRAM, or video card." },
+  { name: "get_running_processes", description: "List the top running processes on the host machine by CPU and memory. Use for questions about what's running, process list, or active applications.", parameters: { filter: "string", limit: "number" } },
+  { name: "get_weather", description: "Get the current weather forecast. Use for questions about the weather, temperature, rain, or forecast. Requires OPEN_WEATHER_API_KEY to be configured.", parameters: { date: "today|tomorrow|week" } }
 ];
 
 export function buildObserverToolCatalog({ workerTools = [], intakeTools = OBSERVER_INTAKE_TOOLS } = {}) {
@@ -43,7 +38,10 @@ export function buildObserverToolCatalog({ workerTools = [], intakeTools = OBSER
       scopes: new Set(),
       parameters: tool?.parameters || {},
       risk: "normal",
-      defaultApproved: true
+      defaultApproved: true,
+      source: String(tool?.source || "core").trim() === "plugin" ? "plugin" : "core",
+      pluginId: String(tool?.pluginId || "").trim(),
+      pluginName: String(tool?.pluginName || "").trim()
     };
     existing.scopes.add(scope);
     if (!existing.description && tool?.description) {
@@ -61,6 +59,11 @@ export function buildObserverToolCatalog({ workerTools = [], intakeTools = OBSER
       existing.risk = "approval";
       existing.defaultApproved = false;
     }
+    if (existing.source !== "plugin" && String(tool?.source || "").trim() === "plugin") {
+      existing.source = "plugin";
+      existing.pluginId = String(tool?.pluginId || "").trim();
+      existing.pluginName = String(tool?.pluginName || "").trim();
+    }
     catalog.set(name, existing);
   };
   for (const tool of workerTools) {
@@ -76,15 +79,16 @@ export function buildObserverToolCatalog({ workerTools = [], intakeTools = OBSER
       scopes: [...entry.scopes].sort(),
       parameters: entry.parameters || {},
       risk: entry.risk,
-      defaultApproved: entry.defaultApproved !== false
+      defaultApproved: entry.defaultApproved !== false,
+      source: entry.source,
+      pluginId: entry.pluginId || "",
+      pluginName: entry.pluginName || ""
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function createObserverIntakeToolExecutor(context = {}) {
   const {
-    buildCalendarSummary,
-    buildCalendarToolEventPatch,
     buildCompletionSummary,
     buildDailyBriefingSummary,
     buildDocumentOverviewSummary,
@@ -95,27 +99,29 @@ export function createObserverIntakeToolExecutor(context = {}) {
     buildOutputStatusSummary,
     buildQueueStatusSummary,
     buildRecentActivitySummary,
+    buildScheduledJobsSummary,
+    buildSystemStatusSummary,
     ensureAutonomousToolApproved,
-    findCalendarEventsByReference,
+    executePluginIntakeToolCall,
     formatDateForUser,
     formatDateTimeForUser,
     formatTimeForUser,
     inspectSkillLibrarySkill,
     listInstalledSkills,
-    normalizeCalendarToolEventInput,
     normalizeToolCallRecord,
     normalizeToolName,
     parseToolCallArgs,
     readPromptMemoryContext,
     recordSkillInstallationRequest,
     recordToolAdditionRequest,
-    removeCalendarEvent,
-    saveCalendarEvent,
     searchSkillLibrary,
-    summarizeCalendarEvent,
     toolMoveMail,
     toolSendMail,
-    writePromptMemoryFile
+    writePromptMemoryFile,
+    buildHostSystemStatusSummary,
+    buildGpuStatusSummary,
+    buildRunningProcessesSummary,
+    buildWeatherSummary
   } = context;
 
   async function executeIntakeToolCall(toolCall) {
@@ -190,110 +196,15 @@ export function createObserverIntakeToolExecutor(context = {}) {
     if (name === "get_daily_briefing") {
       return { text: (await buildDailyBriefingSummary()).join("\n") };
     }
-    if (name === "get_calendar_summary") {
-      const args = parseToolCallArgs(normalized);
-      const lines = await buildCalendarSummary({
-        scope: String(args.scope || "upcoming").trim().toLowerCase(),
-        limit: Number(args.limit || 10) || 10
-      });
-      return { text: lines.join("\n") };
+    if (name === "get_scheduled_jobs") {
+      if (typeof buildScheduledJobsSummary === "function") {
+        return { text: (await buildScheduledJobsSummary()).join("\n") };
+      }
     }
-    if (name === "find_calendar_events") {
-      const args = parseToolCallArgs(normalized);
-      const matches = await findCalendarEventsByReference({
-        eventId: String(args.eventId || "").trim(),
-        titleContains: String(args.titleContains || "").trim(),
-        date: String(args.date || "").trim(),
-        status: String(args.status || "").trim()
-      });
-      return {
-        text: matches.length
-          ? matches.map((entry) => `- ${entry.id}: ${summarizeCalendarEvent(entry)}`).join("\n")
-          : "No matching calendar events found.",
-        events: matches
-      };
-    }
-    if (name === "create_calendar_event") {
-      const args = parseToolCallArgs(normalized);
-      const nextEvent = normalizeCalendarToolEventInput(args);
-      if (!nextEvent.title || !nextEvent.startAt) {
-        throw new Error("create_calendar_event requires title and startAt");
+    if (name === "get_system_status") {
+      if (typeof buildSystemStatusSummary === "function") {
+        return { text: (await buildSystemStatusSummary()).join("\n") };
       }
-      const saved = await saveCalendarEvent(nextEvent);
-      return {
-        text: `Created calendar event ${saved.id}: ${summarizeCalendarEvent(saved)}.`,
-        event: saved
-      };
-    }
-    if (name === "update_calendar_event") {
-      const args = parseToolCallArgs(normalized);
-      const matches = await findCalendarEventsByReference({
-        eventId: String(args.eventId || "").trim(),
-        titleContains: String(args.titleContains || "").trim(),
-        date: String(args.date || "").trim()
-      });
-      if (!matches.length) {
-        throw new Error("No matching calendar event found");
-      }
-      if (matches.length > 1) {
-        throw new Error(`Multiple calendar events matched: ${matches.map((entry) => entry.id).join(", ")}`);
-      }
-      const saved = await saveCalendarEvent({
-        ...matches[0],
-        ...buildCalendarToolEventPatch(args)
-      });
-      return {
-        text: `Updated calendar event ${saved.id}: ${summarizeCalendarEvent(saved)}.`,
-        event: saved
-      };
-    }
-    if (name === "remove_calendar_event") {
-      const args = parseToolCallArgs(normalized);
-      const matches = await findCalendarEventsByReference({
-        eventId: String(args.eventId || "").trim(),
-        titleContains: String(args.titleContains || "").trim(),
-        date: String(args.date || "").trim()
-      });
-      if (!matches.length) {
-        throw new Error("No matching calendar event found");
-      }
-      if (matches.length > 1) {
-        throw new Error(`Multiple calendar events matched: ${matches.map((entry) => entry.id).join(", ")}`);
-      }
-      await removeCalendarEvent(matches[0].id);
-      return {
-        text: `Removed calendar event ${matches[0].id}: ${summarizeCalendarEvent(matches[0])}.`,
-        removedEventId: matches[0].id
-      };
-    }
-    if (name === "set_calendar_event_state") {
-      const args = parseToolCallArgs(normalized);
-      const status = String(args.status || "").trim().toLowerCase();
-      if (!["active", "completed", "cancelled"].includes(status)) {
-        throw new Error("status must be active, completed, or cancelled");
-      }
-      const matches = await findCalendarEventsByReference({
-        eventId: String(args.eventId || "").trim(),
-        titleContains: String(args.titleContains || "").trim(),
-        date: String(args.date || "").trim()
-      });
-      if (!matches.length) {
-        throw new Error("No matching calendar event found");
-      }
-      if (matches.length > 1) {
-        throw new Error(`Multiple calendar events matched: ${matches.map((entry) => entry.id).join(", ")}`);
-      }
-      const now = Date.now();
-      const saved = await saveCalendarEvent({
-        ...matches[0],
-        status,
-        completedAt: status === "completed" ? now : 0,
-        cancelledAt: status === "cancelled" ? now : 0
-      });
-      return {
-        text: `Marked calendar event ${saved.id} as ${status}.`,
-        event: saved
-      };
     }
     if (name === "search_skill_library") {
       const args = parseToolCallArgs(normalized);
@@ -343,6 +254,39 @@ export function createObserverIntakeToolExecutor(context = {}) {
           : "No extra OpenClaw skills are installed yet.",
         skills
       };
+    }
+    if (name === "get_host_system_status") {
+      if (typeof buildHostSystemStatusSummary === "function") {
+        return { text: (await buildHostSystemStatusSummary()).join("\n") };
+      }
+    }
+    if (name === "get_gpu_status") {
+      if (typeof buildGpuStatusSummary === "function") {
+        return { text: (await buildGpuStatusSummary()).join("\n") };
+      }
+    }
+    if (name === "get_running_processes") {
+      if (typeof buildRunningProcessesSummary === "function") {
+        const args = parseToolCallArgs(normalized);
+        return { text: (await buildRunningProcessesSummary({ filter: args.filter, limit: args.limit })).join("\n") };
+      }
+    }
+    if (name === "get_weather") {
+      if (typeof buildWeatherSummary === "function") {
+        const args = parseToolCallArgs(normalized);
+        return { text: (await buildWeatherSummary({ date: args.date || "today" })).join("\n") };
+      }
+    }
+    if (typeof executePluginIntakeToolCall === "function") {
+      const pluginResult = await executePluginIntakeToolCall({
+        name,
+        args: parseToolCallArgs(normalized),
+        toolCall,
+        normalized
+      });
+      if (pluginResult !== undefined && pluginResult !== null) {
+        return pluginResult;
+      }
     }
     throw new Error(`unknown intake tool: ${name}`);
   }

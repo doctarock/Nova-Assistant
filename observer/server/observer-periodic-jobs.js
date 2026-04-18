@@ -2,12 +2,12 @@ export function createObserverPeriodicJobs(context = {}) {
   const {
     AGENT_BRAINS,
     QUESTION_MAINTENANCE_INTERVAL_MS,
-    TASK_QUEUE_CLOSED,
     TASK_QUEUE_DONE,
     TASK_QUEUE_INBOX,
     TASK_QUEUE_IN_PROGRESS,
     TASK_QUEUE_WAITING,
     chooseQuestionMaintenanceBrain,
+    closeTaskRecord,
     compactTaskText,
     createQueuedTask,
     createWaitingTask,
@@ -27,54 +27,146 @@ export function createObserverPeriodicJobs(context = {}) {
     sendUnsureMailDigest,
     upsertMailWatchRule
   } = context;
-async function ensureMailWatchJob(rule) {
-  const normalizedRule = rule && typeof rule === "object" ? rule : null;
-  if (!normalizedRule?.id || normalizedRule.enabled === false) {
-    return null;
+
+function normalizeMailWatchRuleAction(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["trash", "archive", "forward", "keep"].includes(normalized) ? normalized : "";
+}
+
+function extractEmailDomain(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  const atIndex = normalized.lastIndexOf("@");
+  return atIndex >= 0 ? normalized.slice(atIndex + 1) : "";
+}
+
+function normalizeMailWatchRuleMatch(match = {}) {
+  const normalized = match && typeof match === "object" ? match : {};
+  return {
+    fromAddress: String(normalized.fromAddress || "").trim().toLowerCase(),
+    fromDomain: String(normalized.fromDomain || "").trim().toLowerCase(),
+    category: String(normalized.category || "").trim().toLowerCase(),
+    automated: normalized.automated === true ? true : null
+  };
+}
+
+function hasMailWatchRuleMatch(match = {}) {
+  const normalized = normalizeMailWatchRuleMatch(match);
+  return Boolean(
+    normalized.fromAddress
+    || normalized.fromDomain
+    || normalized.category
+    || normalized.automated === true
+  );
+}
+
+function isExplicitMailWatchActionRule(rule = {}) {
+  return String(rule?.ruleKind || "").trim().toLowerCase() === "message_action"
+    && Boolean(normalizeMailWatchRuleAction(rule?.actionOnMatch))
+    && hasMailWatchRuleMatch(rule?.match);
+}
+
+function ruleMatchesMailMessage(rule = {}, message = {}) {
+  const match = normalizeMailWatchRuleMatch(rule?.match);
+  if (!hasMailWatchRuleMatch(match)) {
+    return false;
   }
-  const seriesId = `mail-watch:${normalizedRule.id}`;
-  const { queued, inProgress, done, failed } = await listAllTasks();
-  const closed = await listTasksByFolder(TASK_QUEUE_CLOSED, "closed");
-  const active = [...queued, ...inProgress].find((task) => String(task.scheduler?.seriesId || "") === seriesId);
-  if (active) {
-    return active;
+  const senderAddress = String(message?.fromAddress || "").trim().toLowerCase();
+  const senderDomain = extractEmailDomain(senderAddress);
+  const category = String(message?.triage?.category || "").trim().toLowerCase();
+  const automated = message?.triage?.automated === true;
+  if (match.fromAddress && senderAddress !== match.fromAddress) {
+    return false;
   }
-  const latestHistorical = [...done, ...failed, ...closed]
-    .filter((task) => String(task.scheduler?.seriesId || "") === seriesId)
-    .sort((left, right) => Number(right.updatedAt || right.createdAt || 0) - Number(left.updatedAt || left.createdAt || 0))[0];
-  if (latestHistorical?.status === "completed" && Number(latestHistorical.notBeforeAt || 0) > Date.now()) {
-    return latestHistorical;
+  if (match.fromDomain && senderDomain !== match.fromDomain) {
+    return false;
   }
-  return createQueuedTask({
-    message: `Mail watch: ${normalizedRule.instruction}`,
-    sessionId: "scheduler",
-    requestedBrainId: "worker",
-    intakeBrainId: "bitnet",
-    internetEnabled: false,
-    selectedMountIds: [],
-    forceToolUse: false,
-    notes: `Internal periodic mail watch for rule "${normalizedRule.id}".`,
-    taskMeta: {
-      internalJobType: "mail_watch",
-      mailWatchRuleId: normalizedRule.id,
-      scheduler: {
-        periodic: true,
-        name: `Mail watch: ${compactTaskText(normalizedRule.instruction, 60)}`,
-        seriesId,
-        every: normalizedRule.every,
-        everyMs: normalizedRule.everyMs
-      },
-      notBeforeAt: Date.now() + Number(normalizedRule.everyMs || 10 * 60 * 1000)
+  if (match.category && category !== match.category) {
+    return false;
+  }
+  if (match.automated === true && automated !== true) {
+    return false;
+  }
+  if (match.subjectKeywords && match.subjectKeywords.length) {
+    const subject = String(message?.subject || "").trim().toLowerCase();
+    if (!match.subjectKeywords.some((kw) => subject.includes(kw))) {
+      return false;
     }
-  });
+  }
+  if (match.bodyKeywords && match.bodyKeywords.length) {
+    const body = String(message?.text || message?.rawText || "").trim().toLowerCase();
+    if (!match.bodyKeywords.some((kw) => body.includes(kw))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function messageReservedBySpecificRule(message = {}, excludingRuleId = "") {
+  const rules = Array.isArray(getMailWatchRulesState()?.rules) ? getMailWatchRulesState().rules : [];
+  return rules.some((rule) =>
+    rule?.enabled !== false
+    && String(rule?.id || "").trim() !== String(excludingRuleId || "").trim()
+    && isExplicitMailWatchActionRule(rule)
+    && ruleMatchesMailMessage(rule, message)
+  );
+}
+
+function getEnabledMailWatchRules() {
+  const rules = Array.isArray(getMailWatchRulesState()?.rules) ? getMailWatchRulesState().rules : [];
+  return rules.filter((rule) => rule && rule.enabled !== false && String(rule.id || "").trim());
+}
+
+function isMailWatchSchedulerTask(task = {}) {
+  return String(task?.internalJobType || "").trim().toLowerCase() === "mail_watch";
+}
+
+async function closeObsoleteMailWatchJobs() {
+  if (typeof closeTaskRecord !== "function") {
+    return;
+  }
+  const { queued, done, failed } = await listAllTasks();
+  const candidates = [...queued, ...done, ...failed].filter(isMailWatchSchedulerTask);
+  for (const task of candidates) {
+    await closeTaskRecord(
+      task,
+      "Closed legacy queue-backed mail watch task because mail rules now run directly during mail grabs."
+    );
+  }
+}
+
+function buildMailWatchJobResponse(summary, meta = {}) {
+  return {
+    ok: true,
+    code: 0,
+    timedOut: false,
+    preset: "internal-mail-watch",
+    brain: AGENT_BRAINS[0],
+    network: "local",
+    mounts: [],
+    attachments: [],
+    outputFiles: [],
+    parsed: {
+      status: "ok",
+      result: {
+        payloads: [{ text: summary, mediaUrl: null }],
+        meta: {
+          durationMs: 0,
+          ...meta
+        }
+      }
+    },
+    stdout: summary,
+    stderr: ""
+  };
+}
+
+async function ensureMailWatchJob() {
+  await closeObsoleteMailWatchJobs();
+  return null;
 }
 
 async function ensureAllMailWatchJobs() {
-  const mailWatchRulesState = getMailWatchRulesState();
-  const rules = Array.isArray(mailWatchRulesState?.rules) ? mailWatchRulesState.rules : [];
-  for (const rule of rules.filter((entry) => entry.enabled !== false)) {
-    await ensureMailWatchJob(rule);
-  }
+  return ensureMailWatchJob();
 }
 
 async function ensureQuestionMaintenanceJob() {
@@ -123,38 +215,100 @@ async function ensureQuestionMaintenanceJob() {
   });
 }
 
-async function executeMailWatchJob(task) {
-  const rule = getMailWatchRule(task.mailWatchRuleId);
-  if (!rule || rule.enabled === false) {
-    return {
-      ok: true,
-      code: 0,
-      timedOut: false,
-      preset: "internal-mail-watch",
-      brain: AGENT_BRAINS[0],
-      network: "local",
-      mounts: [],
-      attachments: [],
-      outputFiles: [],
-      parsed: { status: "ok", result: { payloads: [{ text: "Mail watch skipped because the rule is no longer active.", mediaUrl: null }], meta: { durationMs: 0 } } },
-      stdout: "Mail watch skipped because the rule is no longer active.",
-      stderr: ""
-    };
-  }
-
+async function executeSingleMailWatchRule(rule) {
   const blocked = new Set(
     [
       getActiveMailAgent()?.email
     ].filter(Boolean).map((value) => String(value).trim().toLowerCase())
   );
   const mailState = getMailState();
-  const allInboxMessages = (Array.isArray(mailState?.recentMessages) ? mailState.recentMessages : [])
+  const baseInboxMessages = (Array.isArray(mailState?.recentMessages) ? mailState.recentMessages : [])
     .filter((message) => String(message.fromAddress || "").trim())
     .filter((message) => !blocked.has(String(message.fromAddress || "").trim().toLowerCase()))
     .sort((left, right) => Number(left.receivedAt || 0) - Number(right.receivedAt || 0));
   const forwardedMessageIds = new Set(Array.isArray(rule.forwardedMessageIds) ? rule.forwardedMessageIds.map((value) => String(value || "").trim()) : []);
   const resolvedUnsureMessageIds = new Set(Array.isArray(rule.resolvedUnsureMessageIds) ? rule.resolvedUnsureMessageIds.map((value) => String(value || "").trim()) : []);
   const pendingUnsureMessageIds = new Set(Array.isArray(rule.pendingUnsureMessageIds) ? rule.pendingUnsureMessageIds.map((value) => String(value || "").trim()) : []);
+  if (isExplicitMailWatchActionRule(rule)) {
+    const action = normalizeMailWatchRuleAction(rule.actionOnMatch);
+    const recentMessages = baseInboxMessages
+      .filter((message) => ruleMatchesMailMessage(rule, message))
+      .filter((message) => Number(message.receivedAt || 0) > Number(rule.lastProcessedReceivedAt || 0));
+    const notifyEmail = resolveMailWatchNotifyEmail(rule);
+    let forwardedCount = 0;
+    let movedCount = 0;
+    let keptCount = 0;
+    const actionSummaries = [];
+    for (const message of recentMessages) {
+      const messageId = String(message.id || "").trim();
+      if (!messageId) {
+        continue;
+      }
+      if (action === "trash") {
+        try {
+          await moveAgentMail({ destination: "trash", messageId });
+          movedCount += 1;
+          actionSummaries.push(`${message.subject || "(no subject)"} -> trashed by explicit rule`);
+        } catch (error) {
+          actionSummaries.push(`${message.subject || "(no subject)"} -> trash failed (${error.message})`);
+        }
+      } else if (action === "archive") {
+        try {
+          await moveAgentMail({ destination: "archive", messageId });
+          movedCount += 1;
+          actionSummaries.push(`${message.subject || "(no subject)"} -> archived by explicit rule`);
+        } catch (error) {
+          actionSummaries.push(`${message.subject || "(no subject)"} -> archive failed (${error.message})`);
+        }
+      } else if (action === "forward") {
+        if (!forwardedMessageIds.has(messageId)) {
+          try {
+            await forwardMailToUser(message, notifyEmail);
+            forwardedMessageIds.add(messageId);
+            forwardedCount += 1;
+            actionSummaries.push(`${message.subject || "(no subject)"} -> forwarded by explicit rule`);
+          } catch (error) {
+            actionSummaries.push(`${message.subject || "(no subject)"} -> forward failed (${error.message})`);
+          }
+        }
+      } else {
+        keptCount += 1;
+        actionSummaries.push(`${message.subject || "(no subject)"} -> kept by explicit rule`);
+      }
+      resolvedUnsureMessageIds.add(messageId);
+      pendingUnsureMessageIds.delete(messageId);
+    }
+    const latestSeenAt = recentMessages.length
+      ? Math.min(Math.max(...recentMessages.map((message) => Number(message.receivedAt || 0))), Date.now())
+      : Number(rule.lastProcessedReceivedAt || 0);
+    const updatedRule = await upsertMailWatchRule({
+      ...rule,
+      forwardedMessageIds: [...forwardedMessageIds],
+      resolvedUnsureMessageIds: [...resolvedUnsureMessageIds],
+      pendingUnsureMessageIds: [...pendingUnsureMessageIds],
+      lastCheckedAt: Date.now(),
+      lastProcessedReceivedAt: latestSeenAt
+    });
+    const summary = recentMessages.length
+      ? `Mail rule matched ${recentMessages.length} new email${recentMessages.length === 1 ? "" : "s"} and ${action === "forward" ? `forwarded ${forwardedCount}` : action === "keep" ? `kept ${keptCount}` : `${action === "trash" ? "trashed" : "archived"} ${movedCount}`}.`
+      : "Mail rule checked for new matching emails and found nothing new to handle.";
+    return {
+      ruleId: updatedRule.id,
+      action,
+      summary,
+      matchedCount: recentMessages.length,
+      movedCount,
+      forwardedCount,
+      keptCount,
+      trashedCount: action === "trash" ? movedCount : 0,
+      archivedCount: action === "archive" ? movedCount : 0,
+      pendingUnsureCount: pendingUnsureMessageIds.size,
+      residualSweepCount: 0,
+      actionSummaries
+    };
+  }
+  const allInboxMessages = baseInboxMessages
+    .filter((message) => !messageReservedBySpecificRule(message, rule.id));
   const pendingUnsureBefore = new Set(pendingUnsureMessageIds);
   const recentMessages = allInboxMessages
     .filter((message) => Number(message.receivedAt || 0) > Number(rule.lastProcessedReceivedAt || 0));
@@ -295,7 +449,7 @@ async function executeMailWatchJob(task) {
   }
 
   const latestSeenAt = recentMessages.length
-    ? Math.max(...recentMessages.map((message) => Number(message.receivedAt || 0)))
+    ? Math.min(Math.max(...recentMessages.map((message) => Number(message.receivedAt || 0))), Date.now())
     : Number(rule.lastProcessedReceivedAt || 0);
   const updatedRule = await upsertMailWatchRule({
     ...rule,
@@ -316,24 +470,122 @@ async function executeMailWatchJob(task) {
         ? `Mail watch found no new copied emails, but revisited ${residualSweepCount} older inbox item${residualSweepCount === 1 ? "" : "s"} and handled what it could.`
         : "Mail watch checked for new copied emails and found nothing new that needed review.";
   return {
-    ok: true,
-    code: 0,
-    timedOut: false,
-    preset: "internal-mail-watch",
-    brain: AGENT_BRAINS[0],
-    network: "local",
-    mounts: [],
-    attachments: [],
-    outputFiles: [],
-    parsed: { status: "ok", result: { payloads: [{ text: summary, mediaUrl: null }], meta: { durationMs: 0, ruleId: updatedRule.id, forwardedCount, autoHandledCount, trashedCount, promptedCount, pendingUnsureCount: pendingUnsureMessageIds.size, residualSweepCount, autoHandledSummaries } } },
-    stdout: summary,
-    stderr: ""
+    ruleId: updatedRule.id,
+    action: "",
+    summary,
+    matchedCount: recentMessages.length,
+    movedCount: 0,
+    forwardedCount,
+    keptCount: 0,
+    trashedCount,
+    archivedCount: 0,
+    autoHandledCount,
+    promptedCount,
+    pendingUnsureCount: pendingUnsureMessageIds.size,
+    residualSweepCount,
+    actionSummaries: autoHandledSummaries
   };
+}
+
+function normalizeRequestedMailWatchRuleIds(ruleIds = []) {
+  return Array.isArray(ruleIds)
+    ? ruleIds.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+}
+
+async function runMailWatchRulesNow({ source = "mail_grab", ruleIds = [] } = {}) {
+  await closeObsoleteMailWatchJobs();
+  const requestedRuleIds = normalizeRequestedMailWatchRuleIds(ruleIds);
+  const enabledRules = getEnabledMailWatchRules()
+    .filter((rule) => !requestedRuleIds.length || requestedRuleIds.includes(String(rule.id || "").trim()));
+  if (!enabledRules.length) {
+    return buildMailWatchJobResponse(
+      requestedRuleIds.length
+        ? "Mail rules skipped because the requested rule is no longer active."
+        : "Mail rules skipped because there are no active rules in MAIL-RULES.md.",
+      {
+        source,
+        checkedRuleCount: 0
+      }
+    );
+  }
+
+  const ruleResults = [];
+  for (const rule of enabledRules) {
+    ruleResults.push(await executeSingleMailWatchRule(rule));
+  }
+
+  const aggregate = ruleResults.reduce((totals, result) => ({
+    matchedCount: totals.matchedCount + Number(result?.matchedCount || 0),
+    forwardedCount: totals.forwardedCount + Number(result?.forwardedCount || 0),
+    trashedCount: totals.trashedCount + Number(result?.trashedCount || 0),
+    archivedCount: totals.archivedCount + Number(result?.archivedCount || 0),
+    keptCount: totals.keptCount + Number(result?.keptCount || 0),
+    promptedCount: totals.promptedCount + Number(result?.promptedCount || 0),
+    residualSweepCount: totals.residualSweepCount + Number(result?.residualSweepCount || 0)
+  }), {
+    matchedCount: 0,
+    forwardedCount: 0,
+    trashedCount: 0,
+    archivedCount: 0,
+    keptCount: 0,
+    promptedCount: 0,
+    residualSweepCount: 0
+  });
+  const totalPendingUnsure = getEnabledMailWatchRules()
+    .reduce((count, rule) => count + (Array.isArray(rule?.pendingUnsureMessageIds) ? rule.pendingUnsureMessageIds.length : 0), 0);
+  const summaryParts = [];
+  if (aggregate.matchedCount) {
+    summaryParts.push(`matched ${aggregate.matchedCount} new email${aggregate.matchedCount === 1 ? "" : "s"}`);
+  }
+  if (aggregate.forwardedCount) {
+    summaryParts.push(`forwarded ${aggregate.forwardedCount}`);
+  }
+  if (aggregate.trashedCount) {
+    summaryParts.push(`trashed ${aggregate.trashedCount}`);
+  }
+  if (aggregate.archivedCount) {
+    summaryParts.push(`archived ${aggregate.archivedCount}`);
+  }
+  if (aggregate.keptCount) {
+    summaryParts.push(`kept ${aggregate.keptCount}`);
+  }
+  if (aggregate.promptedCount) {
+    summaryParts.push(`prompted on ${aggregate.promptedCount} unsure email${aggregate.promptedCount === 1 ? "" : "s"}`);
+  }
+  const waitingSummary = totalPendingUnsure
+    ? `${totalPendingUnsure} unsure email${totalPendingUnsure === 1 ? "" : "s"} still need direction`
+    : "no unsure mail is waiting";
+  const summary = summaryParts.length
+    ? `Mail rules checked ${enabledRules.length} active rule${enabledRules.length === 1 ? "" : "s"} after ${source.replace(/_/g, " ")}, ${summaryParts.join(", ")}, and ${waitingSummary}.`
+    : totalPendingUnsure
+      ? `Mail rules checked ${enabledRules.length} active rule${enabledRules.length === 1 ? "" : "s"} after ${source.replace(/_/g, " ")} and ${waitingSummary}.`
+      : `Mail rules checked ${enabledRules.length} active rule${enabledRules.length === 1 ? "" : "s"} after ${source.replace(/_/g, " ")} and found nothing new to handle.`;
+
+  return buildMailWatchJobResponse(summary, {
+    source,
+    checkedRuleCount: enabledRules.length,
+    totalPendingUnsure,
+    ...aggregate,
+    ruleSummaries: ruleResults.map((result) => ({
+      ruleId: result?.ruleId || "",
+      summary: result?.summary || ""
+    }))
+  });
+}
+
+async function executeMailWatchJob(task = {}) {
+  const targetRuleId = String(task?.mailWatchRuleId || "").trim();
+  return runMailWatchRulesNow({
+    source: "legacy_mail_watch_task",
+    ruleIds: targetRuleId ? [targetRuleId] : []
+  });
 }
   return {
     ensureAllMailWatchJobs,
     ensureMailWatchJob,
     ensureQuestionMaintenanceJob,
-    executeMailWatchJob
+    executeMailWatchJob,
+    runMailWatchRulesNow
   };
 }

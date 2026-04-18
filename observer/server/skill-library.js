@@ -209,13 +209,44 @@ main().catch((error) => {
       slug: String(skill.slug || safeSlug),
       name: String(skill.displayName || skill.name || safeSlug),
       summary: String(skill.summary || ""),
-      description: String(skill.description || ""),
+      description: String(skill.description || skill.summary || ""),
       version: String(latestVersion.version || ""),
       owner: String(owner.handle || owner.name || ""),
       homepage: String(skill.homepage || ""),
       repoUrl: String(skill.repoUrl || ""),
       installed: await containerSkillExists(safeSlug),
       approved: await isApprovedInstalledSkill(safeSlug)
+    };
+  }
+
+  function parseInstalledSkillMetadata(content = "", safeSlug = "") {
+    const text = String(content || "");
+    const lines = text.split(/\r?\n/);
+    const pickFrontmatter = (field) => {
+      const pattern = new RegExp(`^${field}:\\s*(.+)$`, "mi");
+      return String(text.match(pattern)?.[1] || "").trim();
+    };
+    let name = pickFrontmatter("name");
+    let description = pickFrontmatter("description") || pickFrontmatter("summary");
+    if (!name) {
+      const heading = text.match(/^\s*#\s+(.+?)\s*$/m);
+      name = String(heading?.[1] || "").trim();
+    }
+    if (!description) {
+      const firstBodyLine = lines
+        .map((line) => String(line || "").trim())
+        .find((line) =>
+          line
+          && !line.startsWith("#")
+          && !line.startsWith("```")
+          && line !== "---"
+          && !/^[A-Za-z0-9_.-]+:\s+/.test(line)
+        );
+      description = String(firstBodyLine || "").trim();
+    }
+    return {
+      name: name || safeSlug,
+      description
     };
   }
 
@@ -229,12 +260,11 @@ main().catch((error) => {
       throw new Error(`skill ${safeSlug} is not installed`);
     }
     const content = await readContainerFile(skillPath);
-    const nameMatch = content.match(/^name:\s*(.+)$/mi);
-    const descriptionMatch = content.match(/^description:\s*(.+)$/mi);
+    const metadata = parseInstalledSkillMetadata(content, safeSlug);
     return {
       slug: safeSlug,
-      name: String(nameMatch?.[1] || safeSlug).trim(),
-      description: String(descriptionMatch?.[1] || "").trim(),
+      name: String(metadata.name || safeSlug).trim(),
+      description: String(metadata.description || "").trim(),
       skillPath,
       containerPath: `${observerContainerSkillsRoot}/${safeSlug}/SKILL.md`,
       approved: await isApprovedInstalledSkill(safeSlug)

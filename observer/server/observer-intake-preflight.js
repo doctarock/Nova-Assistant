@@ -5,9 +5,11 @@ export function createObserverIntakePreflight(context = {}) {
     extractFileReferenceCandidates,
     extractJsonObject,
     getBrain,
+    getSessionHistory,
     isCpuQueueLane,
     listHealthyRoutingHelpers,
     listIdleHelperBrains,
+    looksLikeFollowUpMessage,
     looksLikePlaceholderTaskMessage,
     normalizeContainerMountPathCandidate,
     normalizeUserRequest,
@@ -82,7 +84,10 @@ async function maybeRewritePromptWithIdleBrain({ message = "", sessionId = "Main
     timeoutMs: 6000,
     keepAlive: MODEL_KEEPALIVE,
     baseUrl: helperBrain.ollamaBaseUrl,
-    options: isCpuQueueLane(helperBrain) ? { num_gpu: 0 } : undefined
+    options: isCpuQueueLane(helperBrain) ? { num_gpu: 0 } : undefined,
+    brainId: helperBrain.id,
+    leaseOwnerId: `prompt-rewrite:${String(sessionId || "Main").trim() || "Main"}`,
+    leaseWaitMs: 2500
   });
   if (!result.ok) {
     return {
@@ -185,6 +190,50 @@ function extractConcreteTaskFileTargets(message = "") {
   )];
 }
 
+function parseConstraintListLines(message = "") {
+  const lines = String(message || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) {
+    return { lines: [], constraintLines: [] };
+  }
+  const constraintLines = lines.filter((line) => {
+    if (!line || line.length > 90) {
+      return false;
+    }
+    if (/:$/.test(line)) {
+      return false;
+    }
+    if (/^(please|write|draft|create|produce|generate|for each|keywords?|include|cover)\b/i.test(line)) {
+      return false;
+    }
+    if (/[.!?]$/.test(line)) {
+      return false;
+    }
+    return line.split(/\s+/).length <= 8;
+  });
+  return { lines, constraintLines };
+}
+
+function isClearGenerativeExecutionRequest(message = "") {
+  const raw = String(message || "").trim();
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  if (/^\s*(what|how|why|when|where|who)\b/.test(lower) || /\?\s*$/.test(raw)) {
+    return false;
+  }
+  const hasActionVerb = /\b(write|draft|create|produce|generate|compose|prepare)\b/.test(lower);
+  if (!hasActionVerb) {
+    return false;
+  }
+  const startsImperative = /^(please\s+)?(write|draft|create|produce|generate|compose|prepare)\b/.test(lower);
+  const hasDeliverableCue = /\b(article|blog post|post|outline|summary|email|script|copy|headlines?|captions?)\b/.test(lower);
+  const hasStructuredConstraintCue = /\b(for each|for these|using these|use these|keywords?\s*:|include(?:\s+the)?\s+following|cover\s+these)\b/.test(lower);
+  const { lines, constraintLines } = parseConstraintListLines(raw);
+  const hasConstraintList = constraintLines.length >= 3 || (lines.length >= 4 && constraintLines.length >= 2);
+  return startsImperative && hasDeliverableCue && (hasStructuredConstraintCue || hasConstraintList);
+}
+
 function shouldBypassWorkerPreflight(task = {}) {
   const message = String(task?.message || "").trim();
   const lower = message.toLowerCase();
@@ -193,6 +242,9 @@ function shouldBypassWorkerPreflight(task = {}) {
   }
   if (/^\s*(what|how|why|when|where|who)\b/.test(lower)) {
     return false;
+  }
+  if (isClearGenerativeExecutionRequest(message)) {
+    return true;
   }
   const fileTargets = extractConcreteTaskFileTargets(message);
   if (!fileTargets.length) {
@@ -223,7 +275,7 @@ async function runWorkerTaskPreflight(task = {}) {
     return {
       ok: true,
       action: "proceed",
-      reason: "clear_file_execution_request",
+      reason: "clear_execution_request",
       optimizedMessage: String(task?.message || "").trim()
     };
   }
@@ -260,7 +312,10 @@ async function runWorkerTaskPreflight(task = {}) {
     timeoutMs: 6500,
     keepAlive: MODEL_KEEPALIVE,
     baseUrl: helperBrain.ollamaBaseUrl,
-    options: isCpuQueueLane(helperBrain) ? { num_gpu: 0 } : undefined
+    options: isCpuQueueLane(helperBrain) ? { num_gpu: 0 } : undefined,
+    brainId: helperBrain.id,
+    leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `worker-preflight:${String(task?.sessionId || "Main").trim() || "Main"}`,
+    leaseWaitMs: 2500
   });
   if (!result.ok) {
     if (strictPreflight) {
@@ -343,15 +398,25 @@ async function runIntakeWithOptionalRewrite({
       rewrite: null
     };
   }
-  const firstNativeResponse = await tryBuildObserverNativeResponse(originalMessage);
-  if (firstNativeResponse) {
-    return {
-      effectiveMessage: originalMessage,
-      originalMessage,
-      nativeResponse: firstNativeResponse,
-      intakePlan: null,
-      rewrite: null
-    };
+
+  // Skip the stateless native fast-path when the message looks like a
+  // conversational follow-up. The LLM can resolve it properly with session history.
+  const recentExchanges = typeof getSessionHistory === "function" ? getSessionHistory(sessionId) : [];
+  const isFollowUp = typeof looksLikeFollowUpMessage === "function"
+    ? looksLikeFollowUpMessage(originalMessage, recentExchanges)
+    : false;
+
+  if (!isFollowUp) {
+    const firstNativeResponse = await tryBuildObserverNativeResponse(originalMessage);
+    if (firstNativeResponse) {
+      return {
+        effectiveMessage: originalMessage,
+        originalMessage,
+        nativeResponse: firstNativeResponse,
+        intakePlan: null,
+        rewrite: null
+      };
+    }
   }
 
   const firstIntakePlan = await planIntakeWithBitNet({
@@ -388,7 +453,7 @@ async function runIntakeWithOptionalRewrite({
     };
   }
 
-  const rewrittenNativeResponse = await tryBuildObserverNativeResponse(rewrittenMessage);
+  const rewrittenNativeResponse = !isFollowUp ? await tryBuildObserverNativeResponse(rewrittenMessage) : null;
   if (rewrittenNativeResponse) {
     return {
       effectiveMessage: rewrittenMessage,

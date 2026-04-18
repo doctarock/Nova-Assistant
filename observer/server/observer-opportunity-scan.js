@@ -52,6 +52,24 @@ export function createObserverOpportunityScan(context = {}) {
     writeDailyDocumentBriefing,
     opportunityScanState
   } = context;
+
+function countBacklogBlockingQueuedTasks(queuedTasks = [], now = Date.now()) {
+  return (Array.isArray(queuedTasks) ? queuedTasks : []).filter((task) => {
+    if (String(task?.status || "queued").trim().toLowerCase() !== "queued") {
+      return false;
+    }
+    const notBeforeAt = Number(task?.notBeforeAt || 0);
+    const isSleepingSchedulerTask = notBeforeAt > now && (
+      task?.scheduler?.periodic
+      || String(task?.sessionId || "").trim().toLowerCase() === "scheduler"
+    );
+    if (isSleepingSchedulerTask) {
+      return false;
+    }
+    return true;
+  }).length;
+}
+
 async function executeOpportunityScanJob(task) {
   const now = Date.now();
   const projectConfig = getProjectConfig();
@@ -59,7 +77,7 @@ async function executeOpportunityScanJob(task) {
   const remoteParallel = await isRemoteParallelDispatchEnabled();
   const { queued, inProgress } = await listAllTasks();
   const otherInProgress = inProgress.filter((entry) => entry.id !== task.id);
-  const queuedBacklogCount = Array.isArray(queued) ? queued.length : 0;
+  const queuedBacklogCount = countBacklogBlockingQueuedTasks(queued, now);
   const executionCapacity = await getIdleBackgroundExecutionCapacity();
   const idleWorkerBrains = await countIdleBackgroundWorkerBrains();
   const idleHelperBrains = await countIdleHelperBrains();

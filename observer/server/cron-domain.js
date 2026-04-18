@@ -1,35 +1,65 @@
+function normalizeCronDefinition(definition = {}) {
+  const id = String(definition?.id || "").trim();
+  if (!id) {
+    return null;
+  }
+  const name = String(definition?.name || id).trim() || id;
+  const message = String(definition?.message || "").trim() || name;
+  const everyMs = Math.max(0, Number(definition?.everyMs || 0));
+  return {
+    id,
+    name,
+    message,
+    everyMs
+  };
+}
+
+async function listKnownPeriodicDefinitions(context = {}) {
+  const baseDefinitions = [
+    {
+      id: "internal-question-maintenance",
+      name: "Prompt memory question maintenance",
+      message: "Prompt memory question maintenance: ask one focused question, fill out USER.md, MEMORY.md, and PERSONAL.md when answers exist, and deepen those documents when core sections are already filled.",
+      everyMs: context.questionMaintenanceIntervalMs
+    }
+  ];
+  if (typeof context.runPluginHook !== "function") {
+    return baseDefinitions
+      .map((entry) => normalizeCronDefinition(entry))
+      .filter(Boolean);
+  }
+  try {
+    const payload = await context.runPluginHook("cron:definitions:list", {
+      definitions: baseDefinitions.slice()
+    });
+    const candidateDefinitions = Array.isArray(payload?.definitions)
+      ? payload.definitions
+      : baseDefinitions;
+    const definitionsById = new Map();
+    for (const entry of candidateDefinitions) {
+      const normalized = normalizeCronDefinition(entry);
+      if (!normalized) {
+        continue;
+      }
+      definitionsById.set(normalized.id, normalized);
+    }
+    return [...definitionsById.values()];
+  } catch {
+    return baseDefinitions
+      .map((entry) => normalizeCronDefinition(entry))
+      .filter(Boolean);
+  }
+}
+
 export function registerCronRoutes(context = {}) {
   const app = context.app;
 
   app.get("/api/cron/list", async (req, res) => {
     try {
-      const projectConfig = context.getProjectConfig();
       const { queued, inProgress, done, failed } = await context.listAllTasks();
-      const mailWatchRulesState = context.getMailWatchRulesState();
-      const knownPeriodicDefinitions = [
-        {
-          id: "internal-opportunity-scan",
-          name: "Idle workspace opportunity scan",
-          message: "Idle workspace opportunity scan",
-          everyMs: projectConfig.opportunityScanIntervalMs
-        },
-        {
-          id: "internal-question-maintenance",
-          name: "Prompt memory question maintenance",
-          message: "Prompt memory question maintenance: ask one focused question, fill out USER.md, MEMORY.md, and PERSONAL.md when answers exist, and deepen those documents when core sections are already filled.",
-          everyMs: context.questionMaintenanceIntervalMs
-        },
-        ...((Array.isArray(mailWatchRulesState.rules) ? mailWatchRulesState.rules : [])
-          .filter((rule) => rule && rule.enabled !== false && rule.id)
-          .map((rule) => ({
-            id: `mail-watch:${rule.id}`,
-            name: `Mail watch: ${context.compactTaskText(String(rule.instruction || rule.id || "").trim(), 60)}`,
-            message: `Mail watch: ${String(rule.instruction || "").trim()}`,
-            everyMs: Number(rule.everyMs || 0) || 10 * 60 * 1000
-          })))
-      ];
+      const knownPeriodicDefinitions = await listKnownPeriodicDefinitions(context);
       const queueBackedJobs = [...queued, ...inProgress, ...done, ...failed]
-        .filter((task) => task.scheduler?.periodic)
+        .filter((task) => task.scheduler?.periodic && String(task.internalJobType || "").trim().toLowerCase() !== "mail_watch")
         .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))
         .map((task) => ({
           id: task.scheduler.seriesId,

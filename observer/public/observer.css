@@ -88,6 +88,9 @@ h1 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
+.gateway-status-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .panel-block {
   margin-top: 14px;
 }
@@ -137,6 +140,10 @@ h1 {
 .panel-subtle {
   color: var(--muted);
   font-size: 0.95rem;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+  font-size: 12px;
 }
 .remote-status-grid {
   display: grid;
@@ -158,8 +165,8 @@ h1 {
   color: var(--muted);
 }
 .controls {
-  display: grid;
-  grid-template-columns: 180px 220px;
+  display: flex !important;
+  flex-wrap: wrap !important;
   gap: 8px;
   align-items: center;
   margin-bottom: 0;
@@ -220,7 +227,9 @@ h1 {
   font-size: 0.75rem;
   color: var(--muted);
   line-height: 1.35;
-  word-break: break-word;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .attachment-row {
   margin-top: 10px;
@@ -335,64 +344,43 @@ h1 {
   gap: 8px;
   margin-top: 10px;
 }
-.brain-subtab-button {
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font: inherit;
-  cursor: pointer;
-}
-.brain-subtab-button.active {
-  background: var(--accent);
-  color: #fff8f1;
-  border-color: var(--accent);
-}
-.nova-subtab-button {
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font: inherit;
-  display: inline-flex;
-  align-items: center;
+.plugins-subtab-bar,
+.capabilities-subtab-bar {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  cursor: pointer;
+  margin-top: 10px;
 }
-.nova-subtab-button.active {
-  background: var(--accent);
-  color: #fff8f1;
-  border-color: var(--accent);
+.brain-subtab-button,
+.nova-subtab-button,
+.projects-subtab-button,
+.secrets-subtab-button,
+ .system-subtab-button,
+.plugins-subtab-button,
+.capabilities-subtab-button {
+  /* style inherited from shared .tab-button group; kept for semantics */
 }
-.projects-subtab-button {
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font: inherit;
-  cursor: pointer;
+.brain-subtab-button.has-alert {
+  position: relative;
 }
-.projects-subtab-button.active {
-  background: var(--accent);
-  color: #fff8f1;
-  border-color: var(--accent);
+.brain-subtab-button.has-alert::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bad);
 }
-.secrets-subtab-button {
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font: inherit;
-  cursor: pointer;
-}
-.secrets-subtab-button.active {
-  background: var(--accent);
-  color: #fff8f1;
-  border-color: var(--accent);
+.brain-subtab-button.active,
+.nova-subtab-button.active,
+.projects-subtab-button.active,
+.secrets-subtab-button.active,
+ .system-subtab-button.active,
+.plugins-subtab-button.active,
+.capabilities-subtab-button.active {
+  /* active style inherited from shared .tab-button group */
 }
 .brain-subtab-panel {
   display: none;
@@ -412,10 +400,36 @@ h1 {
 .projects-subtab-panel.active {
   display: block;
 }
+.projects-overview-subtab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.projects-overview-subtab-button {
+  /* style inherited from shared .tab-button group; kept for semantics */
+}
+.projects-overview-subtab-button.active {
+  /* active style inherited from shared .tab-button group */
+}
+.projects-overview-subtab-panel {
+  display: none;
+}
+.projects-overview-subtab-panel.active {
+  display: block;
+}
 .secrets-subtab-panel {
   display: none;
 }
 .secrets-subtab-panel.active {
+  display: block;
+}
+.plugins-subtab-panel,
+.capabilities-subtab-panel {
+  display: none;
+}
+.plugins-subtab-panel.active,
+.capabilities-subtab-panel.active {
   display: block;
 }
 .jobs-subtab-bar {
@@ -425,18 +439,10 @@ h1 {
   margin-top: 10px;
 }
 .jobs-subtab-button {
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 7px 12px;
-  font: inherit;
-  cursor: pointer;
+  /* shared styling already applied globally in .tab-button group */
 }
 .jobs-subtab-button.active {
-  background: var(--accent);
-  color: #fff8f1;
-  border-color: var(--accent);
+  /* shared active styling already applied globally in .tab-button group */
 }
 .jobs-subtab-panel {
   display: none;
@@ -480,6 +486,71 @@ h1 {
 .stack-field {
   display: grid;
   gap: 4px;
+}
+.plugin-route-stack {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+.plugin-route-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: #fffdf8;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.plugin-route-method {
+  font-weight: 700;
+  min-width: 46px;
+  letter-spacing: 0.04em;
+}
+.plugin-ui-panel {
+  gap: 10px;
+}
+.plugin-ui-fields {
+  display: grid;
+  gap: 8px;
+}
+.plugin-ui-field textarea {
+  min-height: 88px;
+}
+.plugin-ui-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.plugin-ui-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fffdf8;
+}
+.plugin-ui-result {
+  max-height: 260px;
+  overflow: auto;
+}
+.plugin-toggle-row {
+  align-items: flex-start;
+}
+.plugin-enabled-pill.off {
+  background: rgba(255, 140, 140, 0.18);
+  color: #8f2626;
+  border-color: rgba(170, 60, 60, 0.4);
+}
+#pluginPermissionRulesEditor,
+#pluginTaskLifecycleResult,
+#pluginSessionMemoryResult,
+#pluginCronStatus {
+  max-height: 300px;
+  overflow: auto;
 }
 .brain-routing-grid {
   display: grid;
@@ -536,6 +607,9 @@ h1 {
   color: var(--muted);
   font-size: 0.8rem;
   line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .access-summary {
   display: grid;
@@ -622,6 +696,7 @@ h1 {
 .project-overview-card,
 .project-mini-stat,
 .project-stage-card,
+.project-assessment-card,
 .project-overview-section,
 .project-checklist-panel,
 .project-role-card,
@@ -636,6 +711,9 @@ h1 {
 .project-overview-title,
 .project-mini-stats,
 .project-stage-grid,
+.project-assessment-card,
+.project-assessment-pills,
+.project-assessment-stat-grid,
 .project-overview-grid,
 .project-checklist-grid,
 .project-role-grid,
@@ -656,20 +734,46 @@ h1 {
   align-items: start;
   gap: 8px;
 }
-.project-mini-stats,
-.project-stage-grid,
-.project-checklist-grid,
-.project-role-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+.project-overview-title-row h4 {
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .project-overview-grid {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.project-stage-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.project-assessment-stat-grid,
+.project-mini-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.project-assessment-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .project-mini-stat strong,
 .history-body,
 .project-role-reason,
-.project-directive-objective {
+.project-directive-objective,
+.project-assessment-callout strong {
   display: block;
+}
+.project-assessment-callout {
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+.project-assessment-callout.deferred {
+  background: #fff3df;
+}
+.project-assessment-callout.ready {
+  background: #e7f3e9;
 }
 .project-check-item {
   border-radius: 6px;
@@ -683,6 +787,9 @@ h1 {
 }
 .project-check-item.done {
   background: #e7f3e9;
+}
+.project-check-item.suggested {
+  background: #f0eadb;
 }
 .history-meta {
   color: var(--muted);
@@ -731,10 +838,11 @@ textarea, input {
   color: var(--ink);
   padding: 9px 10px;
   border-radius: 6px;
-  font: inherit;
+  font: 0.92rem "ManropeLocal", "Segoe UI", sans-serif;
+  line-height: 1.35;
 }
 textarea {
-  min-height: 128px;
+  min-height: 108px;
   resize: vertical;
 }
 button {
@@ -761,9 +869,30 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+#systemGatewayPanel .run-meta,
+#systemGatewayPanel .remote-status-grid,
+#systemGatewayPanel .brain-load-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+#brainsStatusPanel .remote-status-grid,
+#brainsStatusPanel .brain-load-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .mail-info-strip {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  overflow: hidden;
+}
+.run-meta .mini,
+.mail-info-strip .mini {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .mini {
   background: var(--panel-strong);
@@ -800,7 +929,7 @@ pre {
   overflow: auto;
   border-radius: 8px;
   white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre-wrap;
 }
 .json-box {
   background: #f6f1e7;
@@ -881,18 +1010,11 @@ pre {
   margin-bottom: 14px;
 }
 .calendar-subtab-button {
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 8px 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  /* styles inherited from shared .tab-button family */
+  gap: 4px;
 }
 .calendar-subtab-button.active {
-  border-color: var(--accent);
-  background: #eef6ff;
+  /* styles inherited from shared active family */
 }
 .calendar-subtab-panel {
   display: none;
@@ -1003,6 +1125,10 @@ select {
   border-radius: 6px;
   font: inherit;
 }
+select.input-warn {
+  border-color: var(--bad);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 20%, transparent);
+}
 .file-list {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1059,7 +1185,7 @@ select {
   top: 12px;
   right: 12px;
   bottom: 12px;
-  width: min(520px, calc(100vw - 24px));
+  width: min(35%, calc(100vw - 24px));
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr);
   gap: 10px;
@@ -1105,16 +1231,57 @@ select {
   align-content: start;
   min-height: 0;
 }
-.tab-button {
-  width: 100%;
+.tab-button,
+.calendar-subtab-button,
+.brain-subtab-button,
+.nova-subtab-button,
+.projects-subtab-button,
+.secrets-subtab-button,
+.system-subtab-button,
+.jobs-subtab-button,
+.plugins-subtab-button,
+.capabilities-subtab-button {
+  width: auto;
   background: var(--panel-strong);
   color: var(--ink);
   border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  min-height: 30px;
+  font-size: 0.85rem;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   white-space: nowrap;
-  padding: 7px 4px;
-  min-height: 38px;
+  min-width: 0;
+}
+.tab-button {
+  width: 100%;
   display: grid;
   place-items: center;
+}
+.tab-button.active,
+.calendar-subtab-button.active,
+.brain-subtab-button.active,
+.nova-subtab-button.active,
+.projects-subtab-button.active,
+.secrets-subtab-button.active,
+.system-subtab-button.active,
+.jobs-subtab-button.active,
+.plugins-subtab-button.active,
+.capabilities-subtab-button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.system-subtab-panel {
+  display: none;
+}
+.system-subtab-panel.active {
+  display: block;
 }
 .drawer-toggle-button {
   font-size: 0.92rem;
@@ -1150,6 +1317,9 @@ select {
   height: 100%;
   overflow: auto;
   padding-right: 2px;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .tab-panel.active {
   display: block;
@@ -1185,7 +1355,15 @@ select {
 .mail-message-list {
   max-height: 360px;
   overflow: auto;
-  padding-right: 4px;
+  overflow-x: auto;
+  padding-right: 0;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.mail-message-list .history-body {
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 .history-item {
   border: 1px solid var(--border);
@@ -1194,6 +1372,10 @@ select {
   background: rgba(255, 252, 246, 0.82);
   display: grid;
   gap: 6px;
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: normal;
+  white-space: normal;
 }
 .regression-suite.ok,
 .regression-case.ok {
@@ -1239,11 +1421,22 @@ select {
   gap: 8px;
 }
 .queue-controls {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+  display: flex;
+  justify-content: space-between;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 10px;
+}
+.queue-status-group {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.queue-action-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .queue-issues-panel {
   display: grid;
@@ -1257,6 +1450,11 @@ select {
   display: grid;
   gap: 8px;
 }
+.repair-monitor-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
 .queue-issue-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1264,6 +1462,9 @@ select {
   padding: 10px;
   display: grid;
   gap: 6px;
+}
+.repair-monitor-card {
+  border-left: 3px solid #c9782d;
 }
 .queue-subtab-bar {
   display: flex;
@@ -1340,6 +1541,9 @@ select {
 }
 .queue-item strong {
   line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .queue-item-actions {
   display: flex;
@@ -1433,23 +1637,6 @@ select {
   color: var(--ink);
   border: 1px solid var(--border);
 }
-.prompt-review-list {
-  display: grid;
-  gap: 14px;
-}
-.prompt-review-card {
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--panel);
-  padding: 14px;
-}
-.prompt-review-text {
-  margin-top: 10px;
-  max-height: 480px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 @media (max-width: 980px) {
   .status-strip,
   .access-summary,
@@ -1465,9 +1652,16 @@ select {
     grid-template-columns: 1fr;
   }
   .jobs-queue-controls {
-    align-items: stretch;
-    flex-direction: column;
-  }
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .queue-controls {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .queue-action-group {
+      justify-content: flex-start;
+    }
   .composer-pane:first-child,
   .composer-pane:last-child {
     grid-column: auto;

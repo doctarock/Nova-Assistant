@@ -1,5 +1,6 @@
 export function createRegressionOrchestrator({
   buildRegressionSuiteDefinitions,
+  listPluginRegressionSuites = () => [],
   outputRoot,
   readLatestReport,
   writeLatestReport,
@@ -13,8 +14,16 @@ export function createRegressionOrchestrator({
   let latestRegressionRunReport = null;
   let activeRegressionRun = null;
 
+  function getRegressionSuiteDefinitions() {
+    const resolvedCoreSuites = buildRegressionSuiteDefinitions({ outputRoot });
+    const resolvedPluginSuites = listPluginRegressionSuites({ outputRoot });
+    const coreSuites = Array.isArray(resolvedCoreSuites) ? resolvedCoreSuites : [];
+    const pluginSuites = Array.isArray(resolvedPluginSuites) ? resolvedPluginSuites : [];
+    return [...coreSuites, ...pluginSuites];
+  }
+
   function listRegressionSuites() {
-    return buildRegressionSuiteDefinitions({ outputRoot }).map((suite) => ({
+    return getRegressionSuiteDefinitions().map((suite) => ({
       id: suite.id,
       label: suite.label,
       description: suite.description,
@@ -53,7 +62,7 @@ export function createRegressionOrchestrator({
   }
 
   async function runRegressionSuiteById(suiteId = "") {
-    const suites = buildRegressionSuiteDefinitions({ outputRoot });
+    const suites = getRegressionSuiteDefinitions();
     const suite = suites.find((entry) => entry.id === String(suiteId || "").trim());
     if (!suite) {
       throw new Error(`Unknown regression suite: ${suiteId}`);
@@ -132,7 +141,7 @@ export function createRegressionOrchestrator({
       throw new Error("A regression run is already in progress.");
     }
     const suiteIds = requestedSuiteId === "all"
-      ? buildRegressionSuiteDefinitions({ outputRoot }).map((suite) => suite.id)
+      ? getRegressionSuiteDefinitions().map((suite) => suite.id)
       : [String(requestedSuiteId || "").trim()];
     activeRegressionRun = {
       suiteId: requestedSuiteId,

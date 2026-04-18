@@ -2,6 +2,7 @@ export function createObserverNativeResponseHelpers(context = {}) {
   const {
     PROMPT_USER_PATH,
     addTodoItem,
+    answerWaitingTask,
     buildCalendarSummary,
     buildChunkedTextPayload,
     buildCompletionSummary,
@@ -9,13 +10,16 @@ export function createObserverNativeResponseHelpers(context = {}) {
     buildDocumentOverviewSummary,
     buildDocumentSearchSummary,
     buildFailureSummary,
+    buildFinanceSummary,
     buildInboxSummary,
     buildMailStatusSummary,
     buildOutputStatusSummary,
+    buildProjectStatusSummary,
     buildQueueStatusSummary,
     buildRecentActivitySummary,
+    buildScheduledJobsSummary,
+    buildSystemStatusSummary,
     buildTodoSummaryLines,
-    ensureMailWatchJob,
     ensureUniqueOutputPath,
     extractDocumentSearchQuery,
     extractFileReferenceCandidates,
@@ -38,15 +42,21 @@ export function createObserverNativeResponseHelpers(context = {}) {
     isDocumentOverviewRequest,
     isDocumentSearchRequest,
     isFailureSummaryRequest,
+    isFinanceSummaryRequest,
+    isHelpRequest,
     isInboxSummaryRequest,
     isMailStatusRequest,
     isOutputStatusRequest,
     isPathWithinAllowedRoots,
+    isProjectStatusRequest,
     isQueueStatusRequest,
+    isScheduledJobsRequest,
+    isSystemStatusRequest,
     isTimeRequest,
     isTodayInboxSummaryRequest,
     isUserIdentityRequest,
     listInstalledSkills,
+    listAllTasks,
     listObserverOutputFiles,
     listTodoItems,
     normalizeContainerMountPathCandidate,
@@ -65,8 +75,7 @@ export function createObserverNativeResponseHelpers(context = {}) {
     searchSkillLibrary,
     setTodoItemStatus,
     toolSendMail,
-    upsertMailWatchRule,
-    broadcast
+    upsertMailWatchRule
   } = context;
 
   async function tryHandleCopyToOutputRequest(message = "") {
@@ -239,17 +248,77 @@ export function createObserverNativeResponseHelpers(context = {}) {
       return null;
     }
     const rule = await upsertMailWatchRule(parsed);
-    setTimeout(() => {
-      ensureMailWatchJob(rule).catch((error) => {
-        broadcast(`[observer] mail watch job error: ${error.message}`);
-      });
-    }, 10);
     return {
       type: "mail_watch_rule",
       title: "Mail watch enabled",
       text: "I'll keep an eye on copied emails, forward the clearly good ones, trash the definite junk, and ask you about the unsure ones.",
-      detail: `Standing instruction saved. I'll review new copied emails every ${rule.every} and prompt you for uncertain ones every ${rule.promptEvery || "4h"}.`,
+      detail: "Standing instruction saved. I'll apply it the next time mail is grabbed and keep using it on future grabs.",
       outputFiles: []
+    };
+  }
+
+  function looksLikeMailWatchWaitingAnswer(message = "") {
+    const lower = String(message || "").trim().toLowerCase();
+    if (!lower) {
+      return false;
+    }
+    return /\b(add|create|make|save|remember)\b[\s\S]*\b(email|mail)\s+rule\b/.test(lower)
+      || (/\b(always|from now on|going forward|future|every time)\b/.test(lower) && /\b(trash|archive|forward|keep)\b/.test(lower))
+      || (/\b(trash|delete|junk|bin|remove|archive|forward|keep|leave|ignore|do nothing)\b/.test(lower) && /\b(it|this|that|email|message)\b/.test(lower));
+  }
+
+  async function tryHandleMailWatchWaitingAnswer(message = "") {
+    const text = String(message || "").trim();
+    if (!looksLikeMailWatchWaitingAnswer(text)) {
+      return null;
+    }
+    const tasks = typeof listAllTasks === "function" ? await listAllTasks() : { waiting: [] };
+    const waitingTasks = Array.isArray(tasks?.waiting) ? tasks.waiting : [];
+    const candidates = waitingTasks
+      .filter((task) => String(task?.internalJobType || "").trim() === "mail_watch_question")
+      .sort((left, right) => Number(right?.updatedAt || right?.createdAt || 0) - Number(left?.updatedAt || left?.createdAt || 0));
+    if (!candidates.length) {
+      if (/\b(email|mail)\s+rule\b/i.test(text)) {
+        return {
+          type: "mail_watch_rule_missing_context",
+          title: "No email waiting",
+          text: "I can add that while vetting an unsure email, but I do not have a pending email decision right now.",
+          detail: "Wait for the next unsure email prompt or use a standing mail-watch instruction."
+        };
+      }
+      return null;
+    }
+    if (candidates.length > 1) {
+      return {
+        type: "mail_watch_rule_ambiguous",
+        title: "Multiple emails waiting",
+        text: "I have more than one unsure email waiting, so I need you to answer the one in the Questions panel first.",
+        detail: `${candidates.length} mail-watch questions are currently waiting for direction.`
+      };
+    }
+    const resolved = await answerWaitingTask(candidates[0].id, text, "Main");
+    const createdMailRules = Array.isArray(resolved?.createdMailRules) ? resolved.createdMailRules : [];
+    const handledAction = String(resolved?.handledAction || "").trim();
+    const actionText = handledAction === "trash"
+      ? "trashed"
+      : handledAction === "archive"
+        ? "archived"
+        : handledAction === "forward"
+          ? "forwarded"
+          : "kept";
+    return {
+      type: createdMailRules.length ? "mail_watch_rule_added" : "mail_watch_answered",
+      title: createdMailRules.length ? "Email rule added" : "Email handled",
+      text: createdMailRules.length
+        ? `I ${actionText} the waiting email and saved ${createdMailRules.length === 1 ? "an email rule" : `${createdMailRules.length} email rules`} for future matching mail.`
+        : `I ${actionText} the waiting email.`,
+      detail: [
+        resolved?.handledMessageCount ? `Affected messages: ${resolved.handledMessageCount}` : "",
+        handledAction ? `Action: ${handledAction}` : "",
+        createdMailRules.length
+          ? createdMailRules.map((rule) => `- ${rule.id}: ${String(rule.instruction || "").trim()}`).join("\n")
+          : ""
+      ].filter(Boolean).join("\n")
     };
   }
 
@@ -325,8 +394,10 @@ export function createObserverNativeResponseHelpers(context = {}) {
   function extractTodoAddRequest(message = "") {
     const text = String(message || "").trim();
     const patterns = [
-      /^(?:can you\s+|could you\s+|please\s+)?(?:add|put)\s+(.+?)\s+(?:to\s+)?(?:(?:my|the)\s+)?(?:to do|todo)\s+list[.!?]*$/i,
-      /^(?:to do|todo)\s*[:\-]\s*(.+)$/i
+      /^(?:can you\s+|could you\s+|please\s+)?(?:add|put|create|make|append|save|stick|throw|jot down|write down|note down)\s+(.+?)\s+(?:to\s+|in\s+|on\s+|into\s+)?(?:(?:my|the)\s+)?(?:to[\s-]?do|todo|backlog|checklist|task list)\s*(?:list|items?)?[.!?]*$/i,
+      /^(?:to[\s-]?do|todo)\s*[:\-]\s*(.+)$/i,
+      /^(?:remind me to|don'?t forget to|note to self:?)\s+(.+)$/i,
+      /^(?:can you\s+|could you\s+|please\s+)?(?:add|note|remember)\s+(.+?)\s+as an? (?:action item|task|to[\s-]?do)[.!?]*$/i
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
@@ -340,8 +411,10 @@ export function createObserverNativeResponseHelpers(context = {}) {
   function extractTodoCompleteRequest(message = "") {
     const text = String(message || "").trim();
     const patterns = [
-      /^(?:can you\s+|could you\s+|please\s+)?(?:mark|check off|complete|finish)\s+(.+?)\s+(?:on\s+)?(?:(?:my|the)\s+)?(?:to do|todo)\s+list[.!?]*$/i,
-      /^(?:can you\s+|could you\s+|please\s+)?(?:mark|set)\s+(.+?)\s+as\s+(?:done|complete)[.!?]*$/i
+      /^(?:can you\s+|could you\s+|please\s+)?(?:mark|check off|complete|finish|tick off|close)\s+(.+?)\s+(?:on\s+|in\s+)?(?:(?:my|the)\s+)?(?:to[\s-]?do|todo)\s*(?:list)?[.!?]*$/i,
+      /^(?:can you\s+|could you\s+|please\s+)?(?:mark|set)\s+(.+?)\s+as\s+(?:done|complete|finished|completed)[.!?]*$/i,
+      /^(?:done(?: with)?|finished(?: with)?|completed?)\s+(.+)[.!?]*$/i,
+      /^(?:i(?:'?ve)?\s+)?(?:done|finished|completed)\s+(.+)[.!?]*$/i
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
@@ -355,8 +428,10 @@ export function createObserverNativeResponseHelpers(context = {}) {
   function extractTodoRemoveRequest(message = "") {
     const text = String(message || "").trim();
     const patterns = [
-      /^(?:can you\s+|could you\s+|please\s+)?(?:remove|delete|clear|drop)\s+(.+?)\s+(?:from\s+)?(?:(?:my|the)\s+)?(?:to do|todo)\s+list[.!?]*$/i,
-      /^(?:can you\s+|could you\s+|please\s+)?(?:remove|delete|clear|drop)\s+todo\s+(.+?)[.!?]*$/i
+      /^(?:can you\s+|could you\s+|please\s+)?(?:remove|delete|clear|drop|cancel|scrap|scratch|discard)\s+(.+?)\s+(?:from\s+|off\s+)?(?:(?:my|the)\s+)?(?:to[\s-]?do|todo)\s*(?:list)?[.!?]*$/i,
+      /^(?:can you\s+|could you\s+|please\s+)?(?:remove|delete|clear|drop|cancel)\s+(?:the\s+)?(?:to[\s-]?do|todo)\s+(.+?)[.!?]*$/i,
+      /^(?:take|strike)\s+(.+?)\s+off\s+(?:(?:my|the)\s+)?(?:to[\s-]?do|todo)\s*(?:list)?[.!?]*$/i,
+      /^(?:never mind|forget it|ignore)\s+(?:about\s+)?(.+?)\s+(?:on\s+)?(?:(?:my|the)\s+)?(?:to[\s-]?do|todo)\s*(?:list)?[.!?]*$/i
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
@@ -369,8 +444,8 @@ export function createObserverNativeResponseHelpers(context = {}) {
 
   function isTodoSummaryRequest(message = "") {
     const lower = String(message || "").toLowerCase().trim();
-    return /\b(to do list|todo list|todos|to dos|personal backlog|checklist)\b/.test(lower)
-      && /\b(show|list|what'?s on|what is on|what are|my|open|current)\b/.test(lower);
+    return /\b(to[\s-]?do list|todo list|todos|to dos|personal backlog|checklist|action items?|task list|my tasks)\b/.test(lower)
+      && /\b(show|list|what'?s on|what is on|what are|my|open|current|pending|remaining|read|give me|tell me)\b/.test(lower);
   }
 
   async function tryHandleTodoRequest(message = "") {
@@ -477,6 +552,11 @@ export function createObserverNativeResponseHelpers(context = {}) {
     const todoResponse = await tryHandleTodoRequest(text);
     if (todoResponse) {
       return todoResponse;
+    }
+
+    const mailWatchWaitingResponse = await tryHandleMailWatchWaitingAnswer(text);
+    if (mailWatchWaitingResponse) {
+      return mailWatchWaitingResponse;
     }
 
     const standingMailWatchResponse = await tryHandleStandingMailWatchRequest(text);
@@ -639,6 +719,79 @@ export function createObserverNativeResponseHelpers(context = {}) {
       return {
         type: "calendar_summary",
         title: "Calendar",
+        text: lines[0],
+        detail: lines.join("\n")
+      };
+    }
+
+    if (typeof isFinanceSummaryRequest === "function" && isFinanceSummaryRequest(text)) {
+      if (typeof buildFinanceSummary === "function") {
+        const lines = await buildFinanceSummary();
+        return {
+          type: "finance_summary",
+          title: "Finance summary",
+          text: lines[0] || "No finance data available.",
+          detail: lines.join("\n")
+        };
+      }
+    }
+
+    if (typeof isProjectStatusRequest === "function" && isProjectStatusRequest(text)) {
+      if (typeof buildProjectStatusSummary === "function") {
+        const lines = await buildProjectStatusSummary();
+        return {
+          type: "project_status",
+          title: "Project status",
+          text: lines[0] || "No active projects found.",
+          detail: lines.join("\n")
+        };
+      }
+    }
+
+    if (typeof isScheduledJobsRequest === "function" && isScheduledJobsRequest(text)) {
+      if (typeof buildScheduledJobsSummary === "function") {
+        const lines = await buildScheduledJobsSummary();
+        return {
+          type: "scheduled_jobs",
+          title: "Scheduled jobs",
+          text: lines[0] || "No scheduled jobs found.",
+          detail: lines.join("\n")
+        };
+      }
+    }
+
+    if (typeof isSystemStatusRequest === "function" && isSystemStatusRequest(text)) {
+      if (typeof buildSystemStatusSummary === "function") {
+        const lines = await buildSystemStatusSummary();
+        return {
+          type: "system_status",
+          title: "System status",
+          text: lines[0] || "System status unavailable.",
+          detail: lines.join("\n")
+        };
+      }
+    }
+
+    if (typeof isHelpRequest === "function" && isHelpRequest(text)) {
+      const lines = [
+        "Here is what I can help you with:",
+        "Status & activity: queue status, recent activity, completion summary, failure summary, daily briefing, system status",
+        "Time & date: current time, current date",
+        "Calendar: what's on today, tomorrow, this week, upcoming events, add/remove events",
+        "Email: inbox summary, today's emails, send email, mail status, poll mailbox",
+        "To-do list: show my todo list, add/complete/remove items",
+        "Files & output: output status, read a file, copy to output",
+        "Documents: document overview, search documents",
+        "Projects: project status, workspace projects",
+        "Finance: finance summary, expenses, income",
+        "Scheduled jobs: scheduled jobs, cron status",
+        "Skills: search skill library, install skill, list installed skills",
+        "Memory: read memory files (USER.md, MEMORY.md, TODAY.md, PERSONAL.md)",
+        "You can also give me tasks to work on and I will queue and execute them."
+      ];
+      return {
+        type: "help",
+        title: "What I can do",
         text: lines[0],
         detail: lines.join("\n")
       };

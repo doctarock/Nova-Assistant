@@ -1,5 +1,52 @@
 export function registerWorkerExecutionRoutes(context = {}) {
   const app = context.app;
+  const QUEUE_FOLDERS = ["inbox", "in_progress", "done", "closed"];
+
+  function normalizePathSlashes(value = "") {
+    return String(value || "").replaceAll("\\", "/");
+  }
+
+  function isMissingFileError(error) {
+    if (!error) {
+      return false;
+    }
+    const code = String(error.code || "").trim().toUpperCase();
+    if (code === "ENOENT") {
+      return true;
+    }
+    const message = String(error.message || "").toLowerCase();
+    return message.includes("enoent") || message.includes("no such file");
+  }
+
+  async function tryReadRelocatedQueueTaskFile(file = "") {
+    const normalizedFile = normalizePathSlashes(file).trim().replace(/^\/+/, "");
+    const fileName = context.path.posix.basename(normalizedFile);
+    if (!/^task-\d+\.json$/i.test(fileName)) {
+      return null;
+    }
+
+    const requestedFolder = normalizedFile.split("/")[0] || "";
+    for (const folder of QUEUE_FOLDERS) {
+      if (folder === requestedFolder) {
+        continue;
+      }
+      const candidateFile = `${folder}/${fileName}`;
+      const candidateTarget = context.resolveInspectablePath("queue", candidateFile);
+      try {
+        const content = await context.readVolumeFile(candidateTarget);
+        return {
+          file: candidateFile,
+          path: candidateTarget,
+          content
+        };
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          throw error;
+        }
+      }
+    }
+    return null;
+  }
 
   app.get("/api/inspect/tree", async (req, res) => {
     const scope = String(req.query.scope || "workspace");
@@ -40,19 +87,50 @@ export function registerWorkerExecutionRoutes(context = {}) {
         throw new Error("file is required");
       }
 
-      const target = scope === "workspace"
+      let target = scope === "workspace"
         ? context.resolveContainerInspectablePath(file)
         : context.resolveInspectablePath(scope, file);
-      const content = scope === "workspace"
-        ? await context.readContainerFile(target)
-        : await context.readVolumeFile(target);
-      res.json({ ok: true, scope, file, path: target, content });
+      let content = "";
+      let resolvedFile = file;
+      let relocated = false;
+      if (scope === "workspace") {
+        content = await context.readContainerFile(target);
+      } else {
+        try {
+          content = await context.readVolumeFile(target);
+        } catch (error) {
+          if (scope !== "queue" || !isMissingFileError(error)) {
+            throw error;
+          }
+          const relocatedMatch = await tryReadRelocatedQueueTaskFile(file);
+          if (!relocatedMatch) {
+            throw error;
+          }
+          target = relocatedMatch.path;
+          content = relocatedMatch.content;
+          resolvedFile = relocatedMatch.file;
+          relocated = resolvedFile !== file;
+        }
+      }
+      res.json({
+        ok: true,
+        scope,
+        file: resolvedFile,
+        requestedFile: file,
+        path: target,
+        relocated,
+        content
+      });
     } catch (error) {
       res.status(400).json({ ok: false, error: error.message });
     }
   });
 
   app.post("/api/state/reset-simple-project", async (req, res) => {
+    const token = String(req.headers["x-admin-token"] || "").trim();
+    if (!token || token !== context.adminUiToken) {
+      return res.status(403).json({ ok: false, error: "This action is only available via the UI." });
+    }
     try {
       const result = await context.resetToSimpleProjectState();
       res.json({

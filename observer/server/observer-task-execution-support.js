@@ -56,6 +56,10 @@ function looksLikePlaceholderTaskMessage(value = "") {
   return /^(?:\.{3,}|\u2026+|\[\.\.\.\]|\(\.\.\.\)|placeholder|same|unchanged)$/i.test(String(value || "").trim());
 }
 
+function looksLikeResearchOrScienceTask(text = "") {
+  return /\b(research|scientific|science|literature review|evidence synthesis|peer[- ]reviewed|citations?|references|study|studies|journal|paper|papers|methodology|hypothesis|dataset|analysis|biology|biological|biochem(?:istry)?|chemistry|chemical|metabolic|pathway|pathways|genetic|genomics|proteomics|clinical|bioinformatics)\b/.test(String(text || "").toLowerCase());
+}
+
 function inferTaskSpecialty(task = {}) {
   const hinted = String(task.specialtyHint || task.opportunitySpecialty || "").trim().toLowerCase();
   if (["code", "document", "general", "background", "creative", "vision", "retrieval"].includes(hinted)) {
@@ -63,11 +67,17 @@ function inferTaskSpecialty(task = {}) {
   }
   const internalJobType = String(task.internalJobType || "").trim().toLowerCase();
   const text = `${String(task.message || "").trim()}\n${String(task.notes || "").trim()}`.toLowerCase();
-  if (internalJobType === "project_cycle" && /\b(manuscript|novel|novella|story|scene|chapter|outline|arc|draft|voice|pacing|dialogue|reading copy|front matter|end matter)\b/.test(text)) {
+  if (internalJobType === "project_cycle" && /\b(manuscript|novel|novella|story|scene|chapter|outline|arc|draft|voice|pacing|dialogue|reading copy|front matter|end matter|character|worldbuild|setting|narrative|fiction|plot|prose)\b/.test(text)) {
     return "creative";
   }
-  if (internalJobType === "project_cycle") {
+  if (internalJobType === "project_cycle" && looksLikeResearchOrScienceTask(text)) {
+    return "retrieval";
+  }
+  if (internalJobType === "project_cycle" && /\b(code|implement|refactor|debug|bug|fix|patch|test|tests|api|backend|frontend|script|build|deploy|repo|repository)\b/.test(text)) {
     return "code";
+  }
+  if (internalJobType === "project_cycle") {
+    return "background";
   }
   if (["opportunity_scan", "mail_watch"].includes(internalJobType)) {
     return "background";
@@ -82,6 +92,9 @@ function inferTaskSpecialty(task = {}) {
     return "creative";
   }
   if (/\b(retrieval|embedding|embed|semantic search|vector|similarity search)\b/.test(text)) {
+    return "retrieval";
+  }
+  if (looksLikeResearchOrScienceTask(text)) {
     return "retrieval";
   }
   if (/\b(code|coder|coding|implement|implementation|refactor|debug|bug|fix|patch|repo|repository|project|function|component|class|api|test|tests|todo|fixme|script)\b/.test(text)) {
@@ -105,6 +118,7 @@ function inferTaskCapabilityProfile({
   const isProjectCycle = text.includes("/PROJECT-TODO.md");
   const isQueuedExecution = String(preset || "").trim().toLowerCase() === "queued-task";
   const looksCodeHeavy = forceToolUse || /\b(project|repo|repository|code|implement|implementation|refactor|debug|bug|fix|patch|todo|fixme|script|test|tests|api|backend|frontend)\b/.test(lower);
+  const looksResearchHeavy = specialty === "retrieval" || looksLikeResearchOrScienceTask(lower);
   const capabilities = [];
   const seen = new Set();
 
@@ -140,6 +154,16 @@ function inferTaskCapabilityProfile({
       ["list_files", "read_document", "read_file", "shell_command"],
       "The task needs grounded workspace inspection before any conclusion.",
       "Use list_files and targeted reads to converge on a concrete project file or directory quickly."
+    );
+  }
+
+  if (looksResearchHeavy) {
+    addCapability(
+      "evidence_synthesis",
+      "Evidence synthesis",
+      ["read_document", "web_fetch", "edit_file"],
+      "The task looks research-heavy and should stay grounded in traceable evidence.",
+      "Capture citations or source references you actually read, then separate verified findings from assumptions."
     );
   }
 
@@ -441,7 +465,10 @@ async function executeCreativeHandoffPass({
     timeoutMs: 45000,
     keepAlive: MODEL_KEEPALIVE,
     baseUrl: creativeBrain.ollamaBaseUrl,
-    signal: abortSignal
+    signal: abortSignal,
+    brainId: creativeBrain.id,
+    leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `creative-handoff:${String(task?.sessionId || "Main").trim() || "Main"}`,
+    leaseWaitMs: 2500
   });
   if (!result.ok) {
     return {
@@ -512,6 +539,63 @@ function scoreBrainForSpecialty(brain, specialty = "general") {
   return 0;
 }
 
+function normalizeCreativeThroughputMode(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["conservative", "auto", "fast"].includes(normalized) ? normalized : "auto";
+}
+
+function taskPrefersHigherThroughputCreativeLane(task = {}, specialty = "general") {
+  return specialty === "creative"
+    && normalizeCreativeThroughputMode(task?.creativeThroughputMode) !== "conservative"
+    && task?.preferHigherThroughputCreativeLane === true;
+}
+
+function scoreBrainForThroughputPreference(brain = {}, task = {}, specialty = "general") {
+  if (!taskPrefersHigherThroughputCreativeLane(task, specialty) || !brain) {
+    return 0;
+  }
+  const brainId = String(brain.id || "").trim().toLowerCase();
+  const endpointId = String(brain.endpointId || "").trim().toLowerCase();
+  const queueLane = String(brain.queueLane || getBrainQueueLane(brain)).trim().toLowerCase();
+  const model = String(brain.model || "").trim().toLowerCase();
+  let score = 0;
+  if (brainId && brainId !== "worker") score += 80;
+  if (endpointId && endpointId !== "local") score += 40;
+  if (queueLane && !/^(|default)$/.test(queueLane) && !queueLane.includes("local")) score += 20;
+  if (/\b(9b|14b|32b|70b)\b/.test(model)) score += 5;
+  return score;
+}
+
+function preferHigherThroughputCreativeWorker(task = {}, preferredBrain = null, orderedBrains = [], specialty = "general", laneLoad = new Map()) {
+  if (!taskPrefersHigherThroughputCreativeLane(task, specialty) || !preferredBrain || !Array.isArray(orderedBrains) || !orderedBrains.length) {
+    return preferredBrain;
+  }
+  const preferredThroughput = scoreBrainForThroughputPreference(preferredBrain, task, specialty);
+  const preferredSpecialtyScore = scoreBrainForSpecialty(preferredBrain, specialty);
+  const betterCandidate = orderedBrains
+    .filter((brain) => brain && brain.id !== preferredBrain.id)
+    .map((brain) => ({
+      brain,
+      throughput: scoreBrainForThroughputPreference(brain, task, specialty),
+      specialtyScore: scoreBrainForSpecialty(brain, specialty),
+      load: Number(laneLoad.get(String(brain.queueLane || getBrainQueueLane(brain)).trim()) || 0)
+    }))
+    .filter((entry) => entry.throughput > preferredThroughput && entry.specialtyScore >= preferredSpecialtyScore)
+    .sort((left, right) => {
+      if (right.throughput !== left.throughput) {
+        return right.throughput - left.throughput;
+      }
+      if (left.load !== right.load) {
+        return left.load - right.load;
+      }
+      if (right.specialtyScore !== left.specialtyScore) {
+        return right.specialtyScore - left.specialtyScore;
+      }
+      return String(left.brain.id || "").localeCompare(String(right.brain.id || ""));
+    })[0];
+  return betterCandidate?.brain || preferredBrain;
+}
+
 function chooseLessLoadedEquivalentWorker(preferredBrain, orderedBrains = [], specialty = "general", laneLoad = new Map()) {
   if (!preferredBrain || !Array.isArray(orderedBrains) || !orderedBrains.length) {
     return preferredBrain;
@@ -569,10 +653,12 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
     brain,
     health: await getOllamaEndpointHealth(brain.ollamaBaseUrl)
   })));
-  const workers = healthEntries
+  const allHealthyWorkers = healthEntries
     .filter((entry) => entry.health.running)
     .map((entry) => entry.brain);
-  const defaultWorker = workers.find((brain) => brain.id === "worker") || workers[0] || null;
+  const specialty = inferTaskSpecialty(task);
+  const workers = allHealthyWorkers.filter((brain) => canBrainHandleSpecialty(brain, specialty));
+  const defaultWorker = workers.find((brain) => brain.id === "worker") || allHealthyWorkers.find((brain) => brain.id === "worker") || workers[0] || allHealthyWorkers[0] || null;
   if (!defaultWorker) {
     return {
       specialty: "general",
@@ -583,20 +669,21 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
   }
   if (!routing.enabled) {
     return {
-      specialty: inferTaskSpecialty(task),
+      specialty,
       preferredBrainId: preferredBrainId || defaultWorker.id,
       fallbackBrainIds: [],
       strategy: "disabled"
     };
   }
 
-  const specialty = inferTaskSpecialty(task);
+  const prefersFastCreativeLane = taskPrefersHigherThroughputCreativeLane(task, specialty);
   const laneLoad = await getQueueLaneLoadSnapshot();
   const remoteTriageBrain = await chooseHealthyRemoteTriageBrain({
     availableBrains,
     laneLoad
   });
-  const configuredOrder = routing.specialistMap[specialty] || [];
+  const configuredOrder = (routing.specialistMap[specialty] || [])
+    .filter((id) => !(prefersFastCreativeLane && String(id || "").trim() === "worker"));
   const candidates = configuredOrder
     .map((id) => workers.find((brain) => brain.id === id))
     .filter(Boolean);
@@ -622,6 +709,11 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
     const rightScore = scoreBrainForSpecialty(right, specialty);
     if (leftScore !== rightScore) {
       return rightScore - leftScore;
+    }
+    const leftThroughput = scoreBrainForThroughputPreference(left, task, specialty);
+    const rightThroughput = scoreBrainForThroughputPreference(right, task, specialty);
+    if (leftThroughput !== rightThroughput) {
+      return rightThroughput - leftThroughput;
     }
     const leftLoad = Number(laneLoad.get(String(left.queueLane || getBrainQueueLane(left)).trim()) || 0);
     const rightLoad = Number(laneLoad.get(String(right.queueLane || getBrainQueueLane(right)).trim()) || 0);
@@ -652,13 +744,19 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
         `Task notes: ${String(task.notes || "").trim()}`,
         `Internal job type: ${String(task.internalJobType || "").trim() || "none"}`,
         `Inferred specialty: ${specialty}`,
+        prefersFastCreativeLane
+          ? "Throughput preference: this is a safe creative micro-task. Prefer an idle non-local tool-capable worker lane and avoid the local default worker when an equivalent remote lane is available."
+          : "",
         `Queue lane load: ${ordered.map((brain) => `${brain.id}=${Number(laneLoad.get(String(brain.queueLane || getBrainQueueLane(brain)).trim()) || 0)}`).join("; ")}`,
         `Available workers: ${ordered.map((brain) => `${brain.id} (${brain.label}; ${brain.model}; specialty=${brain.specialty || "general"}; lane=${String(brain.queueLane || getBrainQueueLane(brain)).trim() || "default"})`).join("; ")}`
       ].join("\n");
       const result = await runOllamaJsonGenerate(remoteTriageBrain.model, prompt, {
         timeoutMs: 20000,
         keepAlive: MODEL_KEEPALIVE,
-        baseUrl: remoteTriageBrain.ollamaBaseUrl
+        baseUrl: remoteTriageBrain.ollamaBaseUrl,
+        brainId: remoteTriageBrain.id,
+        leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `route:${String(task?.sessionId || "Main").trim() || "Main"}`,
+        leaseWaitMs: 2500
       });
       if (result.ok) {
         const planned = extractJsonObject(result.text);
@@ -666,7 +764,13 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
         if (preferredByRouter) {
           const balancedPreferred = preferHigherReliabilityProjectCycleWorker(
             task,
-            chooseLessLoadedEquivalentWorker(preferredByRouter, ordered, specialty, laneLoad),
+            preferHigherThroughputCreativeWorker(
+              task,
+              chooseLessLoadedEquivalentWorker(preferredByRouter, ordered, specialty, laneLoad),
+              ordered,
+              specialty,
+              laneLoad
+            ),
             ordered
           );
           const fallbackByRouter = Array.isArray(planned.fallbackBrainIds)
@@ -694,7 +798,13 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
     : ordered[0] || defaultWorker;
   const preferred = preferHigherReliabilityProjectCycleWorker(
     task,
-    chooseLessLoadedEquivalentWorker(initiallyPreferred, ordered, specialty, laneLoad),
+    preferHigherThroughputCreativeWorker(
+      task,
+      chooseLessLoadedEquivalentWorker(initiallyPreferred, ordered, specialty, laneLoad),
+      ordered,
+      specialty,
+      laneLoad
+    ),
     ordered
   );
   const fallbacks = ordered
@@ -720,7 +830,7 @@ function triageTaskRequest({
     intakeBrainId,
     brainId: "worker",
     mode: "queue",
-    reason: forceToolUse ? "tool-capable worker required" : "CPU intake routes work to the Qwen worker",
+    reason: forceToolUse ? "tool-capable worker required" : "CPU intake routes work to the worker",
     complexity: String(message || "").trim().split(/\s+/).filter(Boolean).length,
     signals: {
       internetEnabled,
@@ -845,7 +955,10 @@ async function buildCompletionReviewSummary({ task, runResponse, workerSummary, 
     options: {
       num_gpu: 0
     },
-    baseUrl: intakeBrain.ollamaBaseUrl
+    baseUrl: intakeBrain.ollamaBaseUrl,
+    brainId: intakeBrain.id,
+    leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `completion-review:${String(task?.sessionId || "Main").trim() || "Main"}`,
+    leaseWaitMs: 2500
   });
   if (!result.ok) {
     return fallback;
@@ -865,6 +978,133 @@ async function buildCompletionReviewSummary({ task, runResponse, workerSummary, 
   }
   return review;
 }
+  // Tool families: each entry defines which tool names belong together and the signal
+  // predicate that determines whether they're needed. Order matters only for grouping.
+  const TOOL_FAMILIES = [
+    // Always-on core: basic file ops used by virtually every task
+    {
+      id: "core",
+      names: ["list_files", "read_file", "read_document", "edit_file", "write_file", "move_path"],
+      always: true,
+      match: () => true
+    },
+    // Shell / code validation
+    {
+      id: "shell",
+      names: ["shell_command"],
+      always: false,
+      match: (lower) => /\b(shell|command|run|script|test|build|deploy|validate|compile|npm|node|python|bash|cli|check|verify|pytest|make)\b/.test(lower)
+        || /\b(code|implement|refactor|debug|bug|fix|patch|repo|repository)\b/.test(lower)
+    },
+    // Web fetching
+    {
+      id: "web",
+      names: ["web_fetch"],
+      always: false,
+      match: (lower) => /\b(web|website|url|http|https|browse|internet|fetch|search the web|online)\b/.test(lower),
+      // Philosophy loops may need web_fetch to look up references or verify claims
+      matchJobType: (jobType) => jobType === "philosophy_loop"
+    },
+    // Email
+    {
+      id: "mail",
+      names: ["send_mail", "move_mail"],
+      always: false,
+      match: (lower) => /\b(mail|email|inbox|send|forward|archive)\b/.test(lower)
+    },
+    // Archives
+    {
+      id: "archive",
+      names: ["zip", "unzip"],
+      always: false,
+      match: (lower) => /\.(zip|tar|tgz|tar\.gz|7z)\b/.test(lower) || /\b(zip|unzip|archive|extract|unpack|compress|tarball|bundle)\b/.test(lower)
+    },
+    // PDF
+    {
+      id: "pdf",
+      names: ["export_pdf", "read_pdf"],
+      always: false,
+      match: (lower) => /\bpdf\b/.test(lower)
+    },
+    // WordPress
+    {
+      id: "wordpress",
+      names: ["list_wordpress_sites", "save_wordpress_site", "remove_wordpress_site", "wordpress_test_connection", "wordpress_upsert_post"],
+      always: false,
+      match: (lower) => /\b(wordpress|wp[-_]|blog post|cms|site config)\b/.test(lower)
+    },
+    // Skill library / tool management
+    {
+      id: "skills",
+      names: ["search_skill_library", "inspect_skill_library", "install_skill", "request_skill_installation", "request_tool_addition", "list_installed_skills"],
+      always: false,
+      match: (lower) => /\b(skill library|skills library|openclaw skills|toolbelt|missing tool|missing capability|install skill|clawhub)\b/.test(lower)
+    },
+    // Personal notes
+    {
+      id: "personal_notes",
+      names: ["update_daily_personal_notes"],
+      always: false,
+      match: (lower) => /\b(personal notes?|daily notes?|recreation|diary|reflect|update.*notes?)\b/.test(lower)
+    }
+  ];
+
+  /**
+   * Selects the minimal set of tools needed for a given task.
+   *
+   * Returns { tools, pluginTools, confident } where:
+   * - tools: filtered worker tools (or full list if not confident)
+   * - pluginTools: filtered plugin tools (or full plugin list if not confident)
+   * - confident: true when the prediction is specific enough to omit broad swaths of unrelated tools
+   *
+   * Plugin tools are included when their name or description keywords appear in the
+   * task text, or when internalJobType matches a known plugin job type.
+   */
+  function selectToolsForTask(message = "", internalJobType = "", workerTools = [], pluginTools = []) {
+    const text = String(message || "").trim();
+    const lower = text.toLowerCase();
+    const jobType = String(internalJobType || "").trim().toLowerCase();
+
+    // Build the included tool name set from matching families
+    const included = new Set();
+    let optionalFamiliesMatched = 0;
+    const totalOptionalFamilies = TOOL_FAMILIES.filter((f) => !f.always).length;
+
+    for (const family of TOOL_FAMILIES) {
+      if (family.always || family.match(lower) || family.matchJobType?.(jobType)) {
+        for (const name of family.names) included.add(name);
+        if (!family.always) optionalFamiliesMatched++;
+      }
+    }
+
+    // Confidence: we're confident when only a small fraction of optional families matched.
+    // If >= half the optional families are needed, the task is too broad and the full list is safer.
+    const confident = optionalFamiliesMatched <= Math.max(1, Math.floor(totalOptionalFamilies / 2));
+
+    if (!confident) {
+      return { tools: workerTools, pluginTools, confident: false };
+    }
+
+    // Filter worker tools to those in the included set, preserving original order
+    const filteredWorkerTools = workerTools.filter((tool) => included.has(String(tool?.name || "").trim()));
+
+    // Plugin tools: include when the task references the tool's name or a keyword from its description,
+    // or when the internalJobType matches a known plugin job pattern.
+    const filteredPluginTools = pluginTools.filter((tool) => {
+      const toolName = String(tool?.name || "").trim().toLowerCase();
+      const desc = String(tool?.description || "").trim().toLowerCase();
+      if (lower.includes(toolName)) return true;
+      // Match significant words from the tool description (3+ chars, not stop words)
+      const descWords = desc.split(/\W+/).filter((w) => w.length >= 4 && !/^(this|that|with|from|into|your|when|then|will|have|been|each|they|them|their|after|before|only|also|both|some|more|most|such|well|just|like|than|over|make|take|call|used|use|can|for|the|and|not|you|are|but|all|any|its)$/.test(w));
+      if (descWords.some((word) => lower.includes(word))) return true;
+      // Job-type hints: philosophy_loop → record_philosophy
+      if (jobType === "philosophy_loop" && toolName === "record_philosophy") return true;
+      return false;
+    });
+
+    return { tools: filteredWorkerTools, pluginTools: filteredPluginTools, confident: true };
+  }
+
   return {
     buildCompletionReviewSummary,
     buildTaskCapabilityPromptLines,
@@ -883,6 +1123,7 @@ async function buildCompletionReviewSummary({ task, runResponse, workerSummary, 
     renderCreativeHandoffPacket,
     scoreBrainForSpecialty,
     selectSpecialistBrainRoute,
+    selectToolsForTask,
     summarizeTaskCapabilities,
     triageTaskRequest
   };

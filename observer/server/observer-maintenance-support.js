@@ -3,7 +3,7 @@ export function createObserverMaintenanceSupport(context = {}) {
     HELPER_SCOUT_TIMEOUT_MS,
     MAX_WAITING_QUESTION_COUNT,
     MODEL_KEEPALIVE,
-    PROJECT_ROLE_PLAYBOOKS,
+    getProjectRolePlaybooks = () => [],
     appendDailyQuestionLog,
     applyQuestionMaintenanceAnswer,
     buildAllowedOpportunityReferences,
@@ -33,6 +33,7 @@ export function createObserverMaintenanceSupport(context = {}) {
     isCpuQueueLane,
     isGeneratedObserverArtifactPath,
     isObserverOutputDocumentPath,
+    inferProjectCycleSpecialty,
     listAllTasks,
     listContainerWorkspaceProjects,
     messageReferencesKnownOpportunitySource,
@@ -74,6 +75,10 @@ export function createObserverMaintenanceSupport(context = {}) {
     const snapshot = await buildOpportunityWorkspaceSnapshot();
     const documentScanSummary = await buildDocumentIndexSnapshot();
     const workspaceProjects = await listContainerWorkspaceProjects();
+    const projectsWithSpecialty = workspaceProjects.map((project) => ({
+      ...project,
+      specialty: inferProjectCycleSpecialty(project, {}, "")
+    }));
     const urgentDocuments = Array.isArray(documentScanSummary?.urgentDocuments)
       ? documentScanSummary.urgentDocuments.filter((entry) => !isGeneratedObserverArtifactPath(entry?.path || entry?.relativePath || ""))
       : [];
@@ -84,6 +89,9 @@ export function createObserverMaintenanceSupport(context = {}) {
       urgentDocuments,
       workspaceMarkdown: snapshot?.workspaceMarkdown
     });
+    const projectRolePlaybooks = Array.isArray(getProjectRolePlaybooks())
+      ? getProjectRolePlaybooks()
+      : [];
     const prompt = [
       "You are generating additional background work packages for an observer system.",
       `Your name is ${getAgentPersonaName()}.`,
@@ -100,6 +108,7 @@ export function createObserverMaintenanceSupport(context = {}) {
       "Do not propose work that is already covered by a recent completed task unless there is a clearly unresolved concrete failure.",
       "Prefer returning no tasks over weak or repetitive suggestions.",
       "Review the workspace while wearing rotating professional hats. Consider each hat briefly, then keep only the single strongest grounded task, if any.",
+      "Match the hat to the project type: use creative writing hats (Story Architect, Developmental Editor, Line Editor, Continuity Editor, Character Writer, Worldbuilding Designer) only for creative projects; use software/technical hats only for code projects.",
       "For each hat, look for actual unfinished work in current projects, code, configs, or documents. Prefer tasks that end in a concrete artifact, code change, verification result, or user-facing improvement.",
       "If none of the hats reveal a strong grounded task, return zero tasks.",
       "When you do propose a task, make it specific enough that a worker can act immediately without inventing scope.",
@@ -108,9 +117,9 @@ export function createObserverMaintenanceSupport(context = {}) {
       "Schema: {\"summary\":\"...\",\"tasks\":[{\"message\":\"...\",\"specialtyHint\":\"code|document|general\",\"reason\":\"...\"}]}",
       "",
       "Rotating hats playbook:",
-      ...PROJECT_ROLE_PLAYBOOKS.map((entry) => `- ${entry.name}: ${entry.playbook}`),
+      ...projectRolePlaybooks.map((entry) => `- ${entry.name}: ${entry.playbook}`),
       "",
-      `Workspace projects: ${workspaceProjects.map((project) => project.name).join(", ") || "none"}`,
+      `Workspace projects: ${projectsWithSpecialty.map((project) => `${project.name} (${project.specialty})`).join(", ") || "none"}`,
       `Recent failed tasks: ${(snapshot.recentFailed || []).map((entry) => `${entry.id}: ${entry.summary || entry.message}`).join(" | ") || "none"}`,
       `Recent completed tasks: ${(snapshot.recentDone || []).map((entry) => `${entry.id}: ${entry.summary || entry.message}`).join(" | ") || "none"}`,
       `Priority documents: ${urgentDocuments.slice(0, 6).map((entry) => `${entry.relativePath}: ${entry.summary || entry.heading}`).join(" | ") || "none"}`,
@@ -120,9 +129,35 @@ export function createObserverMaintenanceSupport(context = {}) {
       timeoutMs: HELPER_SCOUT_TIMEOUT_MS,
       keepAlive: MODEL_KEEPALIVE,
       baseUrl: helperBrain.ollamaBaseUrl,
-      options: isCpuQueueLane(helperBrain) ? { num_gpu: 0 } : undefined
+      options: isCpuQueueLane(helperBrain) ? { num_gpu: 0 } : undefined,
+      brainId: helperBrain.id,
+      leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `helper-scout:${helperBrain.id}`,
+      leaseWaitMs: 2500
     });
     if (!result.ok) {
+      if (result.busy) {
+        const skippedSummary = `Helper scout ${helperBrain.label || helperBrain.id} skipped because its lane is busy right now.`;
+        return {
+          ok: true,
+          code: 0,
+          timedOut: false,
+          preset: "internal-helper-scout",
+          brain: helperBrain,
+          network: "local",
+          mounts: [],
+          attachments: [],
+          outputFiles: [],
+          parsed: {
+            status: "ok",
+            result: {
+              payloads: [{ text: skippedSummary, mediaUrl: null }],
+              meta: { durationMs: 0, createdCount: 0, helperBrainId: helperBrain.id, skipped: true }
+            }
+          },
+          stdout: skippedSummary,
+          stderr: ""
+        };
+      }
       return {
         ok: false,
         code: result.code,

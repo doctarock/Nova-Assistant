@@ -21,12 +21,6 @@ function buildMenuIcon(shapes = []) {
 }
 
 const menuTabIconMap = {
-  gatewayTab: buildMenuIcon([
-    '<circle cx="12" cy="12" r="7" />',
-    '<path d="M12 12l4-4" />',
-    '<path d="M12 8V4" />',
-    '<circle cx="16" cy="8" r="1.5" fill="currentColor" stroke="none" />'
-  ]),
   queueTab: buildMenuIcon([
     '<rect x="4" y="5" width="3" height="3" rx="1" />',
     '<path d="M10 6.5h10" />',
@@ -52,17 +46,20 @@ const menuTabIconMap = {
   toolsTab: buildMenuIcon([
     '<path d="M14.7 6.3a3.5 3.5 0 0 0-4.4 4.4L4 17.1 6.9 20l6.3-6.3a3.5 3.5 0 0 0 4.4-4.4l-2.7 1-1.9-1.9Z" />'
   ]),
+  pluginsTab: buildMenuIcon([
+    '<path d="M14.5 3.5a2 2 0 0 1 2.8 2.8l-2 2 1.5 1.5 2-2a2 2 0 1 1 2.8 2.8l-2 2 1.4 1.4a2 2 0 1 1-2.8 2.8l-1.4-1.4-2 2a2 2 0 1 1-2.8-2.8l2-2-1.5-1.5-2 2a2 2 0 1 1-2.8-2.8l2-2-1.4-1.4a2 2 0 1 1 2.8-2.8l1.4 1.4 2-2Z" />'
+  ]),
+  systemTab: buildMenuIcon([
+    '<rect x="4" y="5" width="16" height="14" rx="2" />',
+    '<path d="M8 9h8" />',
+    '<path d="M8 13h5" />',
+    '<circle cx="17" cy="13" r="1.5" fill="currentColor" stroke="none" />'
+  ]),
   projectsTab: buildMenuIcon([
     '<path d="M5 6h14" />',
     '<path d="M5 12h10" />',
     '<path d="M5 18h8" />',
     '<circle cx="18" cy="12" r="3" />'
-  ]),
-  cronTab: buildMenuIcon([
-    '<circle cx="12" cy="13" r="7" />',
-    '<path d="M12 10v3l3 2" />',
-    '<path d="M9 3h6" />',
-    '<path d="M15.5 5.5 17 4" />'
   ]),
   calendarTab: buildMenuIcon([
     '<rect x="4" y="5" width="16" height="15" rx="2" />',
@@ -72,14 +69,6 @@ const menuTabIconMap = {
     '<path d="M8 13h3" />',
     '<path d="M13 13h3" />',
     '<path d="M8 17h3" />'
-  ]),
-  mailTab: buildMenuIcon([
-    '<rect x="4" y="6" width="16" height="12" rx="2" />',
-    '<path d="M4.5 7 12 13l7.5-6" />'
-  ]),
-  testsTab: buildMenuIcon([
-    '<path d="M12 3 5 6v6c0 4.5 2.9 7.8 7 9 4.1-1.2 7-4.5 7-9V6l-7-3Z" />',
-    '<path d="m9 12 2 2 4-4" />'
   ]),
   stateTab: buildMenuIcon([
     '<ellipse cx="12" cy="5" rx="7" ry="3" />',
@@ -365,6 +354,74 @@ function renderTaskReshapeMeta(task) {
   return lines.length ? `<div class="micro">${escapeHtml(lines.join(" | "))}</div>` : "";
 }
 
+function getRepairMonitorKind(task) {
+  const internalJobType = String(task?.internalJobType || "").trim().toLowerCase();
+  if (internalJobType === "escalation_review") {
+    return "Repair review";
+  }
+  if (String(task?.escalationParentTaskId || "").trim()) {
+    return "Escalated retry";
+  }
+  if (String(task?.previousTaskId || "").trim()) {
+    return "Retry attempt";
+  }
+  if (Math.max(0, Number(task?.reshapeAttemptCount || 0)) > 0) {
+    return "Repair follow-up";
+  }
+  return "Repair activity";
+}
+
+function renderRepairTaskList(targetEl, tasks, { emptyText = "No repair activity recorded." } = {}) {
+  if (!targetEl) {
+    return;
+  }
+  if (!Array.isArray(tasks) || !tasks.length) {
+    targetEl.innerHTML = `<div class="panel-subtle">${escapeHtml(emptyText)}</div>`;
+    return;
+  }
+  targetEl.innerHTML = tasks.map((task) => {
+    const outcomeText = getTaskOutcomeText(task);
+    const title = String(task?.message || task?.questionForUser || task?.codename || "(repair task)").trim() || "(repair task)";
+    const repairKind = getRepairMonitorKind(task);
+    const metaBits = [];
+    const sourceTaskId = String(task?.previousTaskId || task?.escalationSourceTaskId || "").trim();
+    const reshapeAttemptCount = Math.max(0, Number(task?.reshapeAttemptCount || 0));
+    if (sourceTaskId) {
+      metaBits.push(`From ${sourceTaskId}`);
+    }
+    if (reshapeAttemptCount > 0) {
+      metaBits.push(`Attempt ${reshapeAttemptCount}/3`);
+    }
+    if (task?.reshapeSourcePhase) {
+      metaBits.push(`Phase ${String(task.reshapeSourcePhase).trim().replaceAll("_", " ")}`);
+    }
+    if (task?.failureClassification) {
+      metaBits.push(`Issue ${String(task.failureClassification).trim().replaceAll("_", " ")}`);
+    }
+    if (task?.finalParseError) {
+      metaBits.push(`Parse error ${String(task.finalParseError).trim()}`);
+    } else if (task?.retryRawResponse || task?.debugRetryRawResponse) {
+      metaBits.push("JSON repair snapshots stored");
+    }
+    return `
+      <div class="queue-issue-card repair-monitor-card">
+        <div class="queue-item-head">
+          <div class="queue-item-actions">
+            <span class="status-chip ${getTaskStatusTone(task.status)}">${escapeHtml(getTaskStatusLabel(task))}</span>
+            <span class="status-chip warn">${escapeHtml(repairKind)}</span>
+            ${renderTaskReshapeBadges(task)}
+          </div>
+        </div>
+        <strong>${escapeHtml(title)}</strong>
+        <div class="micro">Code: ${escapeHtml(task.codename || formatEntityRef("task", task.id || "unknown"))}</div>
+        <div class="micro">${escapeHtml(formatTaskSource(task))}</div>
+        ${metaBits.length ? `<div class="micro">${escapeHtml(metaBits.join(" | "))}</div>` : ""}
+        ${outcomeText ? `<div class="history-body">${escapeHtml(outcomeText)}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
 function renderTaskReshapeIssuesList(targetEl, payload = {}) {
   if (!targetEl) {
     return;
@@ -452,10 +509,12 @@ function loadPanelOpenPreference() {
 
 function activateTab(tabId) {
   setPanelOpen(true);
-  tabPanels.forEach((panel) => {
+  const allPanels = Array.from(document.querySelectorAll(".tab-panel"));
+  const allTabButtons = Array.from(document.querySelectorAll("[data-tab-target]"));
+  allPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.id === tabId);
   });
-  tabButtons.forEach((button) => {
+  allTabButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.tabTarget === tabId);
   });
 }
@@ -470,32 +529,74 @@ function activateBrainSubtab(tabId) {
 }
 
 function activateNovaSubtab(tabId) {
-  activeNovaSubtabId = tabId;
-  novaSubtabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.id === tabId);
+  const novaTabRoot = document.getElementById("novaTab");
+  const panels = novaTabRoot
+    ? Array.from(novaTabRoot.querySelectorAll(".nova-subtab-panel"))
+    : novaSubtabPanels;
+  const buttons = novaTabRoot
+    ? Array.from(novaTabRoot.querySelectorAll("[data-nova-subtab-target]"))
+    : novaSubtabButtons;
+  const requestedId = String(tabId || "novaIdentityPanel").trim() || "novaIdentityPanel";
+  const resolvedId = panels.some((panel) => panel.id === requestedId)
+    ? requestedId
+    : (panels[0]?.id || "novaIdentityPanel");
+  activeNovaSubtabId = resolvedId;
+  panels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === resolvedId);
   });
-  novaSubtabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.novaSubtabTarget === tabId);
-  });
-}
-
-function activateProjectsSubtab(tabId) {
-  activeProjectsSubtabId = tabId;
-  projectsSubtabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.id === tabId);
-  });
-  projectsSubtabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.projectsSubtabTarget === tabId);
+  buttons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.novaSubtabTarget === resolvedId);
   });
 }
 
 function activateSecretsSubtab(tabId) {
-  activeSecretsSubtabId = tabId || "secretsOverviewPanel";
-  secretsSubtabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.id === activeSecretsSubtabId);
+  const secretsTabRoot = document.getElementById("secretsTab");
+  const panels = secretsTabRoot
+    ? Array.from(secretsTabRoot.querySelectorAll(".secrets-subtab-panel"))
+    : secretsSubtabPanels;
+  const buttons = secretsTabRoot
+    ? Array.from(secretsTabRoot.querySelectorAll("[data-secrets-subtab-target]"))
+    : secretsSubtabButtons;
+  const requestedId = String(tabId || "secretsOverviewPanel").trim() || "secretsOverviewPanel";
+  const resolvedId = panels.some((panel) => panel.id === requestedId)
+    ? requestedId
+    : (panels[0]?.id || "secretsOverviewPanel");
+  activeSecretsSubtabId = resolvedId;
+  panels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === resolvedId);
   });
-  secretsSubtabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.secretsSubtabTarget === activeSecretsSubtabId);
+  buttons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.secretsSubtabTarget === resolvedId);
+  });
+}
+
+function activatePluginsSubtab(tabId) {
+  activePluginsSubtabId = tabId || "pluginsInventoryPanel";
+  pluginsSubtabPanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === activePluginsSubtabId);
+  });
+  pluginsSubtabButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.pluginsSubtabTarget === activePluginsSubtabId);
+  });
+}
+
+function activateCapabilitiesSubtab(tabId) {
+  activeCapabilitiesSubtabId = tabId || "capabilitiesToolsPanel";
+  capabilitiesSubtabPanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === activeCapabilitiesSubtabId);
+  });
+  capabilitiesSubtabButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.capabilitiesSubtabTarget === activeCapabilitiesSubtabId);
+  });
+}
+
+function activateSystemSubtab(tabId) {
+  activeSystemSubtabId = tabId || "systemGatewayPanel";
+  systemSubtabPanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === activeSystemSubtabId);
+  });
+  systemSubtabButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.systemSubtabTarget === activeSystemSubtabId);
   });
 }
 
@@ -506,16 +607,6 @@ function activateQueueSubtab(tabId) {
   });
   queueSubtabButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.queueSubtabTarget === tabId);
-  });
-}
-
-function activateJobsSubtab(tabId) {
-  activeJobsSubtabId = tabId || "jobsSchedulesPanel";
-  jobsSubtabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.id === activeJobsSubtabId);
-  });
-  jobsSubtabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.jobsSubtabTarget === activeJobsSubtabId);
   });
 }
 
@@ -756,58 +847,6 @@ function renderHistory() {
   }).join("");
 }
 
-function renderMailMessages(messages) {
-  if (!Array.isArray(messages) || !messages.length) {
-    mailMessagesEl.innerHTML = `<div class="panel-subtle">No mail messages yet.</div>`;
-    return;
-  }
-  mailMessagesEl.innerHTML = messages.map((message) => `
-    <article class="history-item">
-      <div class="history-head">
-        <strong>${escapeHtml(message.subject || "(no subject)")}</strong>
-        <span class="history-source">${escapeHtml(formatDateTime(message.receivedAt))}</span>
-      </div>
-      <div class="micro">${escapeHtml(message.fromName || message.fromAddress || "Unknown sender")} → ${escapeHtml((message.to || []).join(", ") || message.agentEmail || "")}</div>
-      <div class="history-body">${escapeHtml(String(message.text || "").trim() || "(empty message)")}</div>
-    </article>
-  `).join("");
-}
-
-function renderMailMessages(messages) {
-  if (!Array.isArray(messages) || !messages.length) {
-    mailMessagesEl.innerHTML = `<div class="panel-subtle">No mail messages yet.</div>`;
-    return;
-  }
-  mailMessagesEl.innerHTML = messages.map((message) => {
-    const categoryText = `Category: ${String(message?.triage?.category || "other")}`;
-    const flags = [
-      message?.triage?.likelySpam ? "Likely spam" : "",
-      message?.triage?.automated ? "Automated" : ""
-    ].filter(Boolean).join(" | ");
-    const heuristics = Array.isArray(message?.triage?.reasons) ? message.triage.reasons.join(", ") : "";
-    const trustLevel = String(message?.sourceIdentity?.trustLevel || "unknown").trim();
-    const trustText = `Source trust: ${trustLevel}`;
-    const command = message?.command && message.command.detected
-      ? `Command: ${String(message.command.action || "detected").replaceAll("_", " ")}${message.command.taskCodename ? ` (${message.command.taskCodename})` : ""}`
-      : "";
-    const messageId = String(message?.id || "").trim();
-    return `
-      <article class="history-item">
-        <div class="history-head">
-          <strong>${escapeHtml(message.subject || "(no subject)")}</strong>
-          <span class="history-source">${escapeHtml(formatDateTime(message.receivedAt))}</span>
-          <button type="button" class="secondary mail-delete-btn" data-message-id="${escapeAttr(messageId)}">Delete</button>
-        </div>
-        <div class="micro">${escapeHtml(message.fromName || message.fromAddress || "Unknown sender")} -> ${escapeHtml((message.to || []).join(", ") || message.agentEmail || "")}</div>
-        <div class="micro">${escapeHtml(categoryText)}${flags ? ` | ${escapeHtml(flags)}` : ""}</div>
-        <div class="micro">${escapeHtml(trustText)}${command ? ` | ${escapeHtml(command)}` : ""}</div>
-        ${heuristics ? `<div class="micro">${escapeHtml(`Heuristics: ${heuristics}`)}</div>` : ""}
-        <div class="history-body">${escapeHtml(String(message.text || "").trim() || "(empty message)")}</div>
-      </article>
-    `;
-  }).join("");
-}
-
 function enqueueUpdate(item, options = {}) {
   const entry = {
     id: `update-${++queueSequence}`,
@@ -941,7 +980,10 @@ function renderTaskList(targetEl, tasks) {
         && latestTaskSnapshot.waiting.some((task) => String(task?.id || "").trim() === String(taskId || "").trim());
       button.disabled = true;
       try {
-        const r = await fetch("/api/tasks/remove", {
+        const adminFetch = typeof observerApp.adminFetch === "function"
+          ? observerApp.adminFetch.bind(observerApp)
+          : fetch;
+        const r = await adminFetch("/api/tasks/remove", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ taskId })
@@ -982,7 +1024,10 @@ function renderTaskList(targetEl, tasks) {
       const taskId = button.dataset.abortTask;
       button.disabled = true;
       try {
-        const r = await fetch("/api/tasks/abort", {
+        const adminFetch = typeof observerApp.adminFetch === "function"
+          ? observerApp.adminFetch.bind(observerApp)
+          : fetch;
+        const r = await adminFetch("/api/tasks/abort", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ taskId })
@@ -1015,7 +1060,10 @@ function renderTaskList(targetEl, tasks) {
       }
       button.disabled = true;
       try {
-        const r = await fetch("/api/tasks/abort", {
+        const adminFetch = typeof observerApp.adminFetch === "function"
+          ? observerApp.adminFetch.bind(observerApp)
+          : fetch;
+        const r = await adminFetch("/api/tasks/abort", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -1078,7 +1126,10 @@ function renderTaskList(targetEl, tasks) {
       button.disabled = true;
       if (statusEl) statusEl.textContent = "Sending...";
       try {
-        const r = await fetch("/api/tasks/answer", {
+        const adminFetch = typeof observerApp.adminFetch === "function"
+          ? observerApp.adminFetch.bind(observerApp)
+          : fetch;
+        const r = await adminFetch("/api/tasks/answer", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -1156,122 +1207,6 @@ function renderTaskList(targetEl, tasks) {
   });
 }
 
-function renderTodoList(payload = {}) {
-  const open = Array.isArray(payload?.open) ? payload.open : [];
-  const completed = Array.isArray(payload?.completed) ? payload.completed : [];
-  const summary = payload?.summary && typeof payload.summary === "object" ? payload.summary : {};
-
-  if (todoHintEl) {
-    todoHintEl.textContent = `${Number(summary.openCount || open.length)} open item${Number(summary.openCount || open.length) === 1 ? "" : "s"}${completed.length ? `, ${completed.length} completed.` : "."}`;
-  }
-
-  if (todoOpenListEl) {
-    todoOpenListEl.innerHTML = open.length
-      ? open.map((item) => `
-        <div class="queue-item">
-          <div class="queue-item-head">
-            <label class="todo-check">
-              <input type="checkbox" data-complete-todo="${escapeAttr(item.id || "")}" />
-              <strong>${escapeHtml(item.text || "")}</strong>
-            </label>
-            <div class="queue-item-actions">
-              <button type="button" class="secondary" data-remove-todo="${escapeAttr(item.id || "")}">Remove</button>
-            </div>
-          </div>
-          <div class="micro">${escapeHtml(`Added by ${item.createdBy || "user"} · ${formatDateTime(item.updatedAt || item.createdAt)}`)}</div>
-          ${item.linkedTaskCodename ? `<div class="micro">${escapeHtml(`Linked task: ${item.linkedTaskCodename}`)}</div>` : ""}
-        </div>
-      `).join("")
-      : `<div class="panel-subtle">No open to do items.</div>`;
-  }
-
-  if (todoCompletedListEl) {
-    todoCompletedListEl.innerHTML = completed.length
-      ? completed.slice(0, 12).map((item) => `
-        <div class="queue-item">
-          <div class="queue-item-head">
-            <div class="queue-item-actions">
-              <span class="status-chip tone-ok">Completed</span>
-            </div>
-            <div class="queue-item-actions">
-              <button type="button" class="secondary" data-remove-todo="${escapeAttr(item.id || "")}">Remove</button>
-            </div>
-          </div>
-          <strong>${escapeHtml(item.text || "")}</strong>
-          <div class="micro">${escapeHtml(`Completed ${formatDateTime(item.completedAt || item.updatedAt || item.createdAt)}`)}</div>
-          ${item.linkedTaskCodename ? `<div class="micro">${escapeHtml(`Linked task: ${item.linkedTaskCodename}`)}</div>` : ""}
-        </div>
-      `).join("")
-      : `<div class="panel-subtle">No completed items yet.</div>`;
-  }
-
-  const bindRemoveButtons = (targetEl) => {
-    targetEl?.querySelectorAll("[data-remove-todo]").forEach((button) => {
-      button.onclick = async () => {
-        const todoId = String(button.dataset.removeTodo || "").trim();
-        if (!todoId) {
-          return;
-        }
-        button.disabled = true;
-        try {
-          const r = await fetch(`/api/todos/${encodeURIComponent(todoId)}/remove`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              removedBy: "user",
-              sessionId: document.getElementById("sessionId")?.value || "Main"
-            })
-          });
-          const j = await r.json();
-          if (!r.ok || !j.ok) {
-            throw new Error(j.error || "failed to remove to do item");
-          }
-          if (typeof observerApp.loadTodoList === "function") {
-            await observerApp.loadTodoList();
-          }
-        } catch (error) {
-          hintEl.textContent = `To do removal failed: ${String(error?.message || "unknown error")}`;
-          button.disabled = false;
-        }
-      };
-    });
-  };
-
-  todoOpenListEl?.querySelectorAll("[data-complete-todo]").forEach((checkbox) => {
-    checkbox.onchange = async () => {
-      const todoId = String(checkbox.dataset.completeTodo || "").trim();
-      if (!todoId || !checkbox.checked) {
-        return;
-      }
-      checkbox.disabled = true;
-      try {
-        const r = await fetch(`/api/todos/${encodeURIComponent(todoId)}/state`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            status: "completed",
-            completedBy: "user",
-            sessionId: document.getElementById("sessionId")?.value || "Main"
-          })
-        });
-        const j = await r.json();
-        if (!r.ok || !j.ok) {
-          throw new Error(j.error || "failed to complete to do item");
-        }
-        if (typeof observerApp.loadTodoList === "function") {
-          await observerApp.loadTodoList();
-        }
-      } catch (error) {
-        hintEl.textContent = `To do update failed: ${String(error?.message || "unknown error")}`;
-        checkbox.checked = false;
-        checkbox.disabled = false;
-      }
-    };
-  });
-
-  bindRemoveButtons(todoOpenListEl);
-  bindRemoveButtons(todoCompletedListEl);
-}
 
 function toWorkspaceRelativePath(task) {
   const workspacePath = String(task?.workspacePath || task?.path || "").trim();
@@ -1281,7 +1216,7 @@ function toWorkspaceRelativePath(task) {
   if (
     workspacePath.startsWith("task-queue/")
     || workspacePath.startsWith("observer-task-queue/")
-    || workspacePath.startsWith("observer-task-queue/")
+    || workspacePath.startsWith("derpy-observer-task-queue/")
   ) {
     return workspacePath;
   }
@@ -1295,18 +1230,26 @@ function toWorkspaceRelativePath(task) {
 }
 
 function buildTaskFileEntries(taskSnapshot = latestTaskSnapshot) {
+  const repairMonitor = taskSnapshot?.repairMonitor && typeof taskSnapshot.repairMonitor === "object"
+    ? taskSnapshot.repairMonitor
+    : {};
   const groups = [
     { statusLabel: "queued", tasks: taskSnapshot.queued || [] },
     { statusLabel: "waiting", tasks: taskSnapshot.waiting || [] },
     { statusLabel: "in progress", tasks: taskSnapshot.inProgress || [] },
     { statusLabel: "done", tasks: taskSnapshot.done || [] },
-    { statusLabel: "failed", tasks: taskSnapshot.failed || [] }
+    { statusLabel: "failed", tasks: taskSnapshot.failed || [] },
+    { statusLabel: "repair active", tasks: repairMonitor.active || [] },
+    { statusLabel: "repair review", tasks: repairMonitor.reviews || [] },
+    { statusLabel: "repair outcome", tasks: repairMonitor.recent || [] }
   ];
+  const seenPaths = new Set();
   return groups.flatMap((group) => group.tasks.map((task) => {
     const relativePath = toWorkspaceRelativePath(task);
-    if (!relativePath) {
+    if (!relativePath || seenPaths.has(relativePath)) {
       return null;
     }
+    seenPaths.add(relativePath);
     return {
       id: task.id || relativePath,
       relativePath,
@@ -1349,10 +1292,11 @@ Object.assign(observerApp, {
   activateTab,
   activateNovaSubtab,
   activateBrainSubtab,
-  activateProjectsSubtab,
   activateSecretsSubtab,
+  activatePluginsSubtab,
+  activateCapabilitiesSubtab,
+  activateSystemSubtab,
   activateQueueSubtab,
-  activateJobsSubtab,
   formatGpuStatus,
   renderPayloads,
   renderPassivePayload,
@@ -1368,12 +1312,11 @@ Object.assign(observerApp, {
   formatEntityRef,
   rememberTaskEvent,
   renderHistory,
-  renderMailMessages,
   enqueueUpdate,
   showQueuedUpdate,
   renderAttachmentList,
   renderTaskList,
-  renderTodoList,
+  renderRepairTaskList,
   renderTaskReshapeIssuesList,
   renderRegressionResults,
   renderRegressionSuiteList,

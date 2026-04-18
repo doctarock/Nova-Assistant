@@ -1,67 +1,6 @@
 export function registerIntakeRoutingRoutes(context = {}) {
   const app = context.app;
 
-  app.get("/api/prompts/review", async (req, res) => {
-    try {
-      const brains = await context.listAvailableBrains();
-      const selectedMountIds = Array.isArray(context.getObserverConfig().defaults?.mountIds)
-        ? context.getObserverConfig().defaults.mountIds.map((value) => String(value))
-        : [];
-      const internetEnabled = context.getObserverConfig().defaults?.internetEnabled !== false;
-      const intakeBrain = await context.getBrain("bitnet");
-      const entries = [
-        {
-          id: "intake",
-          label: intakeBrain.label,
-          kind: intakeBrain.kind,
-          model: intakeBrain.model,
-          scenario: "Direct reply or queue decision",
-          sampleMessage: "Help me figure out whether this needs a direct answer or a deeper queued pass.",
-          prompt: await context.buildIntakeSystemPrompt({
-            internetEnabled,
-            selectedMountIds,
-            forceToolUse: true,
-            sessionId: "Main"
-          })
-        }
-      ];
-      const workerBrains = brains
-        .filter((brain) => brain.kind === "worker" && brain.toolCapable)
-        .sort((left, right) => String(left.label || left.id).localeCompare(String(right.label || right.id)));
-      for (const brain of workerBrains) {
-        const sampleMessage = context.buildPromptReviewSampleMessage(brain);
-        entries.push({
-          id: brain.id,
-          label: brain.label,
-          kind: brain.kind,
-          model: brain.model,
-          specialty: brain.specialty || "general",
-          queueLane: brain.queueLane || context.getBrainQueueLane(brain),
-          scenario: "Queued execution sample",
-          sampleMessage,
-          prompt: await context.buildWorkerSystemPrompt({
-            message: sampleMessage,
-            brain,
-            internetEnabled,
-            selectedMountIds,
-            forceToolUse: true,
-            preset: "queued-task",
-            runtimeNotesExtra: [
-              "Review sample context: this is a prompt review preview, not a live task."
-            ]
-          })
-        });
-      }
-      res.json({
-        ok: true,
-        generatedAt: Date.now(),
-        entries
-      });
-    } catch (error) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
   app.post("/api/tasks/triage", async (req, res) => {
     try {
       const message = context.normalizeUserRequest(req.body?.message);
@@ -98,6 +37,12 @@ export function registerIntakeRoutingRoutes(context = {}) {
           route: `observer-native:${nativeResponse.type}`,
           notes: nativeResponse.text || nativeResponse.detail || ""
         });
+        if (typeof context.appendSessionExchange === "function") {
+          context.appendSessionExchange(sessionId, {
+            userText: effectiveMessage,
+            agentText: nativeResponse.text || nativeResponse.detail || ""
+          });
+        }
         return res.json({
           ok: true,
           triage: {
@@ -138,6 +83,13 @@ export function registerIntakeRoutingRoutes(context = {}) {
           sessionId,
           route: `reply-only:${intakeBrain.id}`,
           notes: intakePlan.replyText || intakePlan.reason || ""
+        });
+      }
+      if (typeof context.appendSessionExchange === "function" && intakePlan.replyText) {
+        context.appendSessionExchange(sessionId, {
+          userText: effectiveMessage,
+          agentText: intakePlan.replyText,
+          action: intakePlan.action
         });
       }
       res.json({
@@ -198,6 +150,12 @@ export function registerIntakeRoutingRoutes(context = {}) {
       const effectiveMessage = String(intakeResult.effectiveMessage || message).trim() || message;
       const nativeResponse = intakeResult.nativeResponse;
       if (nativeResponse) {
+        if (typeof context.appendSessionExchange === "function") {
+          context.appendSessionExchange(sessionId, {
+            userText: effectiveMessage,
+            agentText: nativeResponse.text || nativeResponse.detail || ""
+          });
+        }
         const outputFiles = nativeResponse.outputFiles || await context.listObserverOutputFiles();
         return res.json({
           ok: true,
@@ -268,6 +226,14 @@ export function registerIntakeRoutingRoutes(context = {}) {
             return created;
           })()
         : [];
+      const agentReplyText = intake.replyText || (intake.action === "enqueue" ? "I'll take a closer look now." : "Done.");
+      if (typeof context.appendSessionExchange === "function" && agentReplyText) {
+        context.appendSessionExchange(sessionId, {
+          userText: effectiveMessage,
+          agentText: agentReplyText,
+          action: intake.action
+        });
+      }
       res.json({
         ok: true,
         code: 0,
@@ -288,7 +254,7 @@ export function registerIntakeRoutingRoutes(context = {}) {
             payloads: [
               {
                 text: context.annotateNovaSpeechText(
-                  intake.replyText || (intake.action === "enqueue" ? "I'll take a closer look now." : "Done."),
+                  agentReplyText,
                   intake.action === "enqueue" ? "success" : "reply"
                 ),
                 mediaUrl: null

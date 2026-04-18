@@ -1,3 +1,5 @@
+import { compressShellResult } from './output-semantic-compression.js';
+
 export function createSandboxIoService({
   runCommand,
   runObserverToolContainerNode
@@ -15,12 +17,30 @@ export function createSandboxIoService({
   }
 
   async function runGatewayShell(command, { input } = {}) {
-    return runCommand("powershell", [
+    const result = await runCommand("powershell", [
       "-NoLogo",
       "-NoProfile",
       "-Command",
       command
     ], { input });
+    
+    // COMPRESSION: Attach semantic map for downstream consumption
+    // The original result structure is preserved for backward compatibility
+    // Downstream code can access result.semantic for compressed form
+    if (result) {
+      const compressed = await compressShellResult(result, command, {
+        expectation: 'execute gateway shell command',
+        minDensity: 50,
+        stripRaw: false  // Keep raw output for backward compatibility
+      });
+      
+      // Attach compression metadata without breaking existing code
+      result.__semantic = compressed.semantic;
+      result.__modelFormat = compressed.modelFormat;
+      result.__validation = compressed.validation;
+    }
+    
+    return result;
   }
 
   async function listContainerFiles(rootPath) {
