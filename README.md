@@ -12,6 +12,7 @@
 
 ## Plugins
 
+- https://github.com/doctarock/Auto-plan-Plugin-for-Home-Assistant
 - https://github.com/doctarock/Browser-Plugin-for-Home-Assistant-playwright-
 - https://github.com/doctarock/Philosophy-Plugin-for-Home-Assistant
 - https://github.com/doctarock/Wordpress-Bridge-Plugin-for-Home-Assistant
