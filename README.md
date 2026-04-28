@@ -8,6 +8,16 @@
 - [Semantic Compression Quick Start](docs/SEMANTIC_COMPRESSION_QUICK_START.md)
 - [Tool Loop Compression Guide](docs/TOOL_LOOP_COMPRESSION_GUIDE.md)
 
+
+## Plugins
+
+- https://github.com/doctarock/Browser-Plugin-for-Home-Assistant-playwright-
+- https://github.com/doctarock/Philosophy-Plugin-for-Home-Assistant
+- https://github.com/doctarock/Wordpress-Bridge-Plugin-for-Home-Assistant
+- https://github.com/doctarock/Finance-Plugin-for-Home-Assistant
+- https://github.com/doctarock/Mail-Plugin-for-Home-Assistant
+- https://github.com/doctarock/Calendar-Plugin-For-Home-Assistant
+- https://github.com/doctarock/Project-Plugin-for-Home-Assistant
 ---
 
 Nova is a host-side AI orchestration application that combines:
