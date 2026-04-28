@@ -47,6 +47,10 @@ function normalizePriority(value = 100) {
   return Math.max(0, Math.min(1000, Math.round(parsed)));
 }
 
+function normalizeStartupPriority(value = 100) {
+  return normalizePriority(value);
+}
+
 function parseSemver(value = "") {
   const normalized = String(value || "").trim();
   if (!normalized) {
@@ -704,6 +708,7 @@ export function createNovaPluginManager(context = {}) {
   function normalizePluginManifest(manifest = {}) {
     return {
       schemaVersion: Number(manifest?.schemaVersion || 1),
+      startupPriority: normalizeStartupPriority(manifest?.startupPriority),
       permissions: normalizeManifestPermissions(manifest?.permissions || {}),
       compatibility: {
         coreApiMin: String(manifest?.compatibility?.coreApiMin || "").trim(),
@@ -1693,22 +1698,49 @@ export function createNovaPluginManager(context = {}) {
     await loadPluginState();
     const factories = uniquePluginList(pluginFactories);
     let pluginStateChanged = false;
-    await Promise.allSettled(factories.map(async (candidate) => {
-      let plugin = null;
-      try {
-        plugin = typeof candidate === "function"
+    const factoryResults = await Promise.allSettled(
+      factories.map(async (candidate, index) => {
+        const plugin = typeof candidate === "function"
           ? await candidate()
           : candidate;
-      } catch (error) {
-        recordPluginFailure("unknown", "factory", error);
-        return;
+        return {
+          candidateIndex: index,
+          plugin
+        };
+      })
+    );
+    const discoveredPlugins = [];
+    for (const result of factoryResults) {
+      if (result.status !== "fulfilled") {
+        recordPluginFailure("unknown", "factory", result.reason);
+        continue;
       }
+      const plugin = result.value?.plugin;
       if (!plugin || typeof plugin !== "object") {
-        return;
+        continue;
       }
+      discoveredPlugins.push({
+        candidateIndex: Number(result.value?.candidateIndex || 0),
+        plugin
+      });
+    }
+    discoveredPlugins.sort((left, right) => {
+      const leftManifest = normalizePluginManifest(left?.plugin?.manifest || {});
+      const rightManifest = normalizePluginManifest(right?.plugin?.manifest || {});
+      const priorityDelta = Number(leftManifest.startupPriority || 100) - Number(rightManifest.startupPriority || 100);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+      if (Number(left.candidateIndex || 0) !== Number(right.candidateIndex || 0)) {
+        return Number(left.candidateIndex || 0) - Number(right.candidateIndex || 0);
+      }
+      return String(left?.plugin?.id || left?.plugin?.name || "").localeCompare(String(right?.plugin?.id || right?.plugin?.name || ""));
+    });
+    for (const entry of discoveredPlugins) {
+      const plugin = entry.plugin;
       const pluginId = normalizePluginId(plugin.id || plugin.name);
       if (!pluginId) {
-        return;
+        continue;
       }
       const pluginMeta = {
         id: pluginId,
@@ -1721,20 +1753,20 @@ export function createNovaPluginManager(context = {}) {
       };
       if (!plugin.manifest || typeof plugin.manifest !== "object") {
         recordPluginFailure(pluginMeta.id, "manifest", "plugin manifest is required");
-        return;
+        continue;
       }
       const compatibilityCheck = isManifestCompatibleWithCore(pluginMeta.manifest);
       if (!compatibilityCheck.ok) {
         recordPluginFailure(pluginMeta.id, "manifest:compatibility", compatibilityCheck.reason);
-        return;
+        continue;
       }
       if (pluginMeta.manifest.security.isolation === "process") {
         recordPluginFailure(pluginMeta.id, "manifest:isolation", "process isolation mode is declared but not available yet");
-        return;
+        continue;
       }
       if (!pluginTrustedByPolicy(pluginMeta)) {
         recordPluginFailure(pluginMeta.id, "trust", "plugin is not trusted by allowlist policy");
-        return;
+        continue;
       }
       if (!knownPluginIds.has(pluginId)) {
         knownPluginIds.add(pluginId);
@@ -1750,7 +1782,7 @@ export function createNovaPluginManager(context = {}) {
           await plugin.init(pluginApi);
         } catch (error) {
           recordPluginFailure(pluginMeta.id, "init", error);
-          return;
+          continue;
         }
       }
       activePlugins.push({
@@ -1766,7 +1798,7 @@ export function createNovaPluginManager(context = {}) {
         moduleHash: pluginMeta.moduleHash,
         enabled: isPluginEnabled(pluginMeta.id)
       }).catch(() => {});
-    }));
+    }
     const activePluginIds = new Set(activePlugins.map((plugin) => normalizePluginId(plugin.id)).filter(Boolean));
     for (const knownPluginId of [...knownPluginIds]) {
       if (activePluginIds.has(knownPluginId)) {

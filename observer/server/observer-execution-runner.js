@@ -126,6 +126,27 @@ export function createObserverExecutionRunner(context = {}) {
       runtimeNotesExtra,
       internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim()
     });
+    const emitExecutionEvent = async (hookName = "", payload = {}) => {
+      await runPluginHook(hookName, {
+        at: Date.now(),
+        taskId: String(normalizedTaskContext?.taskId || "").trim(),
+        sessionId: String(sessionId || "").trim(),
+        preset: String(preset || "").trim(),
+        ...payload
+      }).catch(() => {});
+    };
+    await emitExecutionEvent("worker:execution:started", {
+      brain: {
+        id: String(brain?.id || "").trim(),
+        label: String(brain?.label || "").trim(),
+        specialty: String(brain?.specialty || "").trim(),
+        model: String(brain?.model || "").trim()
+      },
+      internetEnabled: internetEnabled === true,
+      selectedMountIds: Array.isArray(selectedMountIds) ? selectedMountIds : [],
+      internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim(),
+      messagePreview: compactTaskText(String(message || "").trim(), 220)
+    });
 
     const rejectOrRetryInvalidConcreteFinal = (stderr, malformedResponse, feedbackLines) => {
       invalidConcreteFinalCount += 1;
@@ -299,6 +320,13 @@ export function createObserverExecutionRunner(context = {}) {
         }
       );
       if (!result.ok) {
+        await emitExecutionEvent("worker:execution:failed", {
+          durationMs: Date.now() - startedAt,
+          code: result.code,
+          timedOut: result.timedOut === true,
+          aborted: result.stderr === "task aborted by user",
+          error: String(result.stderr || "worker model failed")
+        });
         return {
           ok: false,
           code: result.code,
@@ -368,6 +396,13 @@ export function createObserverExecutionRunner(context = {}) {
           const debugRetryRawResponse = debugRetried.ok ? String(debugRetried.text || "").slice(0, 12000) : "";
           const latestMalformedResponse = debugRetryRawResponse || retryRawResponse || initialRawResponse;
           const finalParseError = debugRetryParseError || retryParseError || initialParseError;
+          await emitExecutionEvent("worker:execution:failed", {
+            durationMs: Date.now() - startedAt,
+            code: 0,
+            timedOut: false,
+            aborted: false,
+            error: `worker returned invalid JSON: ${finalParseError}`
+          });
           return {
             ok: false,
             code: 0,
@@ -822,15 +857,18 @@ export function createObserverExecutionRunner(context = {}) {
           appendRepairLesson(repairContext).catch(() => {});
         }
         // Notify plugins that a worker execution completed successfully
-        runPluginHook("worker:execution:completed", {
+        emitExecutionEvent("worker:execution:completed", {
           ok: true,
-          taskId: String(normalizedTaskContext?.taskId || "").trim(),
-          sessionId: String(sessionId || "").trim(),
           brain: { label: brain.label, specialty: brain.specialty, model: brain.model },
           toolsUsed: executedTools.slice(),
+          mountsUsed: allowedMounts.map((mount) => mount.containerPath),
+          urlsUsed: urlsUsed.slice(),
+          outputFileCount: changedOutputFiles.length,
+          outputFiles: changedOutputFiles.map((file) => file.path || file.name || "").filter(Boolean),
           durationMs: Date.now() - startedAt,
-          finalText
-        }).catch(() => {});
+          finalText,
+          toolLoopDiagnostics
+        });
         return {
           ok: true,
           code: 0,
@@ -1071,6 +1109,14 @@ export function createObserverExecutionRunner(context = {}) {
         const rawName = String(toolCall?.function?.name || "").trim();
         const name = normalizeToolName(rawName) || rawName;
         const parsedArgs = parseToolCallArgs(toolCall);
+        const toolCallStartedAt = Date.now();
+        runPluginHook("worker:tool-call:started", {
+          at: toolCallStartedAt,
+          name,
+          args: parsedArgs,
+          taskId: String(normalizedTaskContext?.taskId || "").trim(),
+          sessionId: String(sessionId || "").trim()
+        }).catch(() => {});
         try {
           const toolResult = await executeWorkerToolCall(toolCall, {
             internetEnabled,
@@ -1110,9 +1156,13 @@ export function createObserverExecutionRunner(context = {}) {
           };
           // Notify plugins that a worker tool call completed
           runPluginHook("worker:tool-call:completed", {
+            at: Date.now(),
             name,
             args: parsedArgs,
             semanticOk,
+            transportOk: true,
+            durationMs: Date.now() - toolCallStartedAt,
+            error: semanticError,
             taskId: String(normalizedTaskContext?.taskId || "").trim(),
             sessionId: String(sessionId || "").trim()
           }).catch(() => {});
@@ -1121,6 +1171,18 @@ export function createObserverExecutionRunner(context = {}) {
           const permissionApprovalRequired = error?.permissionApprovalRequired === true
             || String(error?.code || "").trim() === "permission_requires_user_approval";
           if (permissionApprovalRequired) {
+            runPluginHook("worker:tool-call:completed", {
+              at: Date.now(),
+              name,
+              args: parsedArgs,
+              semanticOk: false,
+              transportOk: false,
+              durationMs: Date.now() - toolCallStartedAt,
+              error: String(error?.message || "").trim(),
+              permissionApprovalRequired: true,
+              taskId: String(normalizedTaskContext?.taskId || "").trim(),
+              sessionId: String(sessionId || "").trim()
+            }).catch(() => {});
             return {
               toolCall,
               name,
@@ -1134,8 +1196,19 @@ export function createObserverExecutionRunner(context = {}) {
               permissionApproval: error?.permissionApproval && typeof error.permissionApproval === "object"
                 ? { ...error.permissionApproval, toolName: name }
                 : { toolName: name, reason: String(error?.message || "").trim() }
-            };
+              };
           }
+          runPluginHook("worker:tool-call:completed", {
+            at: Date.now(),
+            name,
+            args: parsedArgs,
+            semanticOk: false,
+            transportOk: false,
+            durationMs: Date.now() - toolCallStartedAt,
+            error: String(error?.message || error || "tool call failed"),
+            taskId: String(normalizedTaskContext?.taskId || "").trim(),
+            sessionId: String(sessionId || "").trim()
+          }).catch(() => {});
           return {
             toolCall,
             name,
@@ -1257,6 +1330,14 @@ export function createObserverExecutionRunner(context = {}) {
       if (consecutiveNoProgressSteps >= 3) {
         toolLoopDiagnostics.stopReason = "worker made no semantic tool progress across 3 consecutive steps";
         toolLoopDiagnostics.summary = buildToolLoopSummaryText(toolLoopDiagnostics);
+        await emitExecutionEvent("worker:execution:failed", {
+          durationMs: Date.now() - startedAt,
+          code: 1,
+          timedOut: false,
+          aborted: false,
+          error: toolLoopDiagnostics.stopReason,
+          toolLoopDiagnostics
+        });
         return {
           ok: false,
           code: 1,
@@ -1278,6 +1359,14 @@ export function createObserverExecutionRunner(context = {}) {
       if ((requiresConcreteOutcome || mentionsSkillsOrToolbelt) && consecutiveLowValueSteps >= 3) {
         toolLoopDiagnostics.stopReason = "worker kept using tools without concrete progress across 3 consecutive steps";
         toolLoopDiagnostics.summary = buildToolLoopSummaryText(toolLoopDiagnostics);
+        await emitExecutionEvent("worker:execution:failed", {
+          durationMs: Date.now() - startedAt,
+          code: 1,
+          timedOut: false,
+          aborted: false,
+          error: toolLoopDiagnostics.stopReason,
+          toolLoopDiagnostics
+        });
         return {
           ok: false,
           code: 1,
@@ -1320,6 +1409,14 @@ export function createObserverExecutionRunner(context = {}) {
 
     toolLoopDiagnostics.stopReason = "worker exceeded the tool loop cap";
     toolLoopDiagnostics.summary = buildToolLoopSummaryText(toolLoopDiagnostics);
+    await emitExecutionEvent("worker:execution:failed", {
+      durationMs: Date.now() - startedAt,
+      code: 1,
+      timedOut: false,
+      aborted: false,
+      error: toolLoopDiagnostics.stopReason,
+      toolLoopDiagnostics
+    });
     return {
       ok: false,
       code: 1,

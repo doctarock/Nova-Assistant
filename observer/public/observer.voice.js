@@ -412,6 +412,7 @@ function syncVoiceFingerprintMonitor() {
 function updateVoiceUi() {
   syncVoiceFingerprintMonitor();
   updateVoiceTrustDisplay();
+  let visualMode = "off";
   const effectiveVoiceSourceIdentity = getEffectiveVoiceSourceIdentity();
   const speakerMeta = effectiveVoiceSourceIdentity ? ` | Speaker: ${formatVoiceSourceIdentity(effectiveVoiceSourceIdentity)}` : "";
   if (!speechRecognitionSupported) {
@@ -419,11 +420,15 @@ function updateVoiceUi() {
     voiceToggleBtn.textContent = "Voice unavailable";
     setVoiceStatus("Browser speech recognition is unavailable.");
     setVoiceMeta(`This browser does not expose SpeechRecognition.${speakerMeta}`);
+    window.dispatchEvent(new CustomEvent("observer:voice-state", {
+      detail: { mode: "unavailable", listeningEnabled: false, wakeActive: false, questionWaiting: false, at: Date.now() }
+    }));
     return;
   }
   voiceToggleBtn.disabled = false;
   voiceToggleBtn.textContent = voiceListeningEnabled ? "Disable voice" : "Enable voice";
   if (!voiceListeningEnabled) {
+    visualMode = "off";
     setVoiceStatus(renderLanguageString("voice.passiveOff", `Passive listening is off. Say <strong>{{botName}}</strong> to begin, then <strong>{{stopPhrase}}</strong> to finish once enabled.`, {
       botName: escapeHtml(getBotName()),
       stopPhrase: escapeHtml(getStopPhrase())
@@ -431,7 +436,22 @@ function updateVoiceUi() {
     setVoiceMeta(`Wake phrase: ${getBotName()} | Stop phrase: ${getStopPhrase()}${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
     return;
   }
+  if (pendingVoiceQuestionInviteTaskId && !voiceWakeActive && !pendingVoiceQuestionTaskId) {
+    visualMode = "question_waiting";
+    const remainingMs = Math.max(0, pendingVoiceQuestionInviteExpiresAt - Date.now());
+    const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+    const invitationPrompt = pendingVoiceQuestionInviteExpiresAt > Date.now()
+      ? `I have a question waiting. Say <strong>Yes ${escapeHtml(getBotName())}</strong> within <strong>${remainingSeconds}s</strong> if you have a moment.`
+      : `I have a question waiting. Say <strong>Yes ${escapeHtml(getBotName())}</strong> if you have a moment.`;
+    setVoiceStatus(invitationPrompt);
+    setVoiceMeta(`Question waiting: ${pendingVoiceQuestionInviteText || "Nova is waiting for your direction."}${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
+    window.dispatchEvent(new CustomEvent("observer:voice-state", {
+      detail: { mode: visualMode, listeningEnabled: voiceListeningEnabled, wakeActive: voiceWakeActive, questionWaiting: true, at: Date.now() }
+    }));
+    return;
+  }
   if (pendingVoiceQuestionTaskId && !voiceWakeActive) {
+    visualMode = "question_waiting";
     const remainingMs = Math.max(0, pendingVoiceQuestionExpiresAt - Date.now());
     const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
     const waitingPrompt = pendingVoiceQuestionExpiresAt > Date.now()
@@ -439,19 +459,30 @@ function updateVoiceUi() {
       : `Question waiting. Say <strong>${escapeHtml(getBotName())}</strong> to answer by voice.`;
     setVoiceStatus(waitingPrompt);
     setVoiceMeta(`Question: ${pendingVoiceQuestionText || "Nova is waiting for your direction."} | Say "skip question" to remove it.${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
+    window.dispatchEvent(new CustomEvent("observer:voice-state", {
+      detail: { mode: visualMode, listeningEnabled: voiceListeningEnabled, wakeActive: voiceWakeActive, questionWaiting: true, at: Date.now() }
+    }));
     return;
   }
   if (voiceWakeActive) {
+    visualMode = "listening";
     setVoiceStatus(renderLanguageString("voice.listening", `Listening for your request. Say <strong>{{stopPhrase}}</strong> to finish.`, {
       stopPhrase: escapeHtml(getStopPhrase())
     }));
     setVoiceMeta(`Last heard: ${voiceLastTranscript || "nothing yet"}${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
+    window.dispatchEvent(new CustomEvent("observer:voice-state", {
+      detail: { mode: visualMode, listeningEnabled: voiceListeningEnabled, wakeActive: voiceWakeActive, questionWaiting: false, at: Date.now() }
+    }));
     return;
   }
+  visualMode = "passive";
   setVoiceStatus(renderLanguageString("voice.passiveOn", `Passive listening is on. Say <strong>{{botName}}</strong> to begin.`, {
     botName: escapeHtml(getBotName())
   }));
   setVoiceMeta(`Last heard: ${voiceLastTranscript || "nothing yet"}${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
+  window.dispatchEvent(new CustomEvent("observer:voice-state", {
+    detail: { mode: visualMode, listeningEnabled: voiceListeningEnabled, wakeActive: voiceWakeActive, questionWaiting: false, at: Date.now() }
+  }));
 }
 
 function resetVoiceCapture() {
@@ -490,6 +521,52 @@ function clearPendingVoiceQuestionWindow(options = {}) {
   }
 }
 
+function clearPendingVoiceQuestionInvite(options = {}) {
+  const preserveStatus = options.preserveStatus === true;
+  const preserveTask = options.preserveTask === true;
+  if (pendingVoiceQuestionInviteTimer) {
+    window.clearTimeout(pendingVoiceQuestionInviteTimer);
+    pendingVoiceQuestionInviteTimer = null;
+  }
+  if (!preserveTask) {
+    pendingVoiceQuestionInviteTaskId = "";
+    pendingVoiceQuestionInviteText = "";
+  }
+  pendingVoiceQuestionInviteExpiresAt = 0;
+  if (!preserveStatus) {
+    updateVoiceUi();
+  }
+}
+
+function timeoutPendingVoiceQuestionInvite() {
+  if (!pendingVoiceQuestionInviteTaskId) {
+    return;
+  }
+  clearPendingVoiceQuestionInvite({ preserveStatus: true, preserveTask: true });
+  setVoiceStatus("Question invitation timed out. The question is still waiting in the Questions section.");
+  setVoiceMeta(`Say ${getBotName()} to talk to Nova, or start Question Time manually when you're ready.`);
+}
+
+function armPendingVoiceQuestionInvite(task) {
+  if (!task?.id || String(task.status || "") !== "waiting_for_user") {
+    return;
+  }
+  if (!voiceListeningEnabled || !speechRecognitionSupported) {
+    return;
+  }
+  clearPendingVoiceQuestionWindow({ preserveStatus: true, preserveQuestionTime: true });
+  pendingVoiceQuestionInviteTaskId = String(task.id || "");
+  pendingVoiceQuestionInviteText = String(task.questionForUser || "").trim();
+  pendingVoiceQuestionInviteExpiresAt = Date.now() + VOICE_QUESTION_INVITE_TIMEOUT_MS;
+  if (pendingVoiceQuestionInviteTimer) {
+    window.clearTimeout(pendingVoiceQuestionInviteTimer);
+  }
+  pendingVoiceQuestionInviteTimer = window.setTimeout(() => {
+    timeoutPendingVoiceQuestionInvite();
+  }, VOICE_QUESTION_INVITE_TIMEOUT_MS);
+  updateVoiceUi();
+}
+
 function timeoutPendingVoiceQuestionWindow() {
   if (!pendingVoiceQuestionTaskId) {
     return;
@@ -506,6 +583,7 @@ function armPendingVoiceQuestionWindow(task) {
   if (!voiceListeningEnabled || !speechRecognitionSupported) {
     return;
   }
+  clearPendingVoiceQuestionInvite({ preserveStatus: true });
   pendingVoiceQuestionTaskId = String(task.id || "");
   pendingVoiceQuestionText = String(task.questionForUser || "").trim();
   pendingVoiceQuestionExpiresAt = Date.now() + VOICE_QUESTION_WAKE_TIMEOUT_MS;
@@ -563,6 +641,7 @@ function beginImmediateVoiceQuestionCapture(task) {
   if (!voiceListeningEnabled || !speechRecognitionSupported) {
     return;
   }
+  clearPendingVoiceQuestionInvite({ preserveStatus: true });
   armPendingVoiceQuestionWindow(task);
   voiceWakeActive = true;
   voiceCommandCaptureStartedAt = Date.now();
@@ -933,6 +1012,20 @@ function isVoiceSkipWaitingQuestionCommand(text = "") {
   return /^(skip|skip (it|this|that|the|current|next|one)|skip question|skip (this|that|the|current|next|one) question|next question|remove question|remove (this|that|the|current|next|one) question|discard question|discard (this|that|the|current|next|one) question)$/.test(normalized);
 }
 
+function isVoiceQuestionInvitationAcceptance(text = "") {
+  const normalized = normalizeVoiceCommandText(String(text || ""), { stripThank: true })
+    .toLowerCase()
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+  const botName = normalizeVoiceText(getBotName());
+  const botPattern = escapeRegExp(botName).replace(/\s+/g, "\\s+");
+  return new RegExp(`^(yes|yeah|yep|sure|ok|okay|please|go ahead|i do|i do have a moment|now is good|this is a good time)[,\\s-]*${botPattern}$`, "i").test(normalized)
+    || new RegExp(`^${botPattern}[,\\s-]*(yes|yeah|yep|sure|ok|okay|go ahead)$`, "i").test(normalized);
+}
+
 function submitVoicePrompt(text) {
   const cleaned = String(text || "").trim();
   if (!cleaned) {
@@ -1153,6 +1246,25 @@ function handleVoiceTranscript(text, isFinal) {
   const wakePhrase = normalizeVoiceText(getWakePhrase());
   const stopPhrase = normalizeVoiceText(getStopPhrase());
 
+  if (!voiceWakeActive && pendingVoiceQuestionInviteTaskId && isVoiceQuestionInvitationAcceptance(transcript)) {
+    voiceLastTranscript = transcript;
+    const taskId = String(pendingVoiceQuestionInviteTaskId || "").trim();
+    clearPendingVoiceQuestionInvite({ preserveStatus: true });
+    if (typeof setActiveQuestionTimeTaskId === "function") {
+      setActiveQuestionTimeTaskId(taskId);
+    }
+    if (typeof replayWaitingQuestionThroughAvatar === "function") {
+      replayWaitingQuestionThroughAvatar();
+    } else if (typeof window.maybeStartVoiceQuestionWindow === "function") {
+      const waitingTask = (Array.isArray(latestTaskSnapshot?.waiting) ? latestTaskSnapshot.waiting : [])
+        .find((entry) => String(entry?.id || "").trim() === taskId);
+      if (waitingTask) {
+        window.maybeStartVoiceQuestionWindow(waitingTask);
+      }
+    }
+    return;
+  }
+
   if (!voiceWakeActive) {
     const wakeIndex = normalizedTranscript.indexOf(wakePhrase);
     if (wakeIndex >= 0) {
@@ -1308,6 +1420,8 @@ window.maybeStartVoiceQuestionWindow = maybeStartVoiceQuestionWindow;
 window.beginImmediateVoiceQuestionCapture = beginImmediateVoiceQuestionCapture;
 window.requestImmediateVoiceQuestionCapture = requestImmediateVoiceQuestionCapture;
 window.clearPendingVoiceQuestionWindow = clearPendingVoiceQuestionWindow;
+window.armPendingVoiceQuestionInvite = armPendingVoiceQuestionInvite;
+window.clearPendingVoiceQuestionInvite = clearPendingVoiceQuestionInvite;
 Object.assign(observerApp, {
   captureVoiceTrustProfileSignature,
   getCurrentVoiceSourceIdentity: resolveCurrentVoiceSourceIdentity,

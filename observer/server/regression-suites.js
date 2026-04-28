@@ -902,17 +902,17 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
             sessionId: "Main",
             forceToolUse: false,
             message: [
-              "Please write an article on exampleresort for each of these keywords:",
-              "example resort",
-              "example resort beach town",
-              "boat hire beach town",
-              "map of example island",
-              "local slang guide",
-              "slang for awesome",
-              "travel destination",
-              "local word for excellent",
-              "local slang",
-              "local slang meaning"
+              "Please write an article on woolshedecolodge for each of these keywords:",
+              "woolshed eco lodge",
+              "woolshed eco lodge hervey bay",
+              "jetski hire hervey bay",
+              "map of fraser island",
+              "aussie lingo bonza",
+              "aussie slang for awesome",
+              "australia",
+              "australian word for excellent",
+              "bonza australian slang",
+              "bonza mate meaning"
             ].join("\n")
           },
           expectedBypass: true
@@ -1246,6 +1246,45 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           unexpectedIncludes: [
             "purpose, setup, and current status",
             "best runnable or shippable next step"
+          ]
+        },
+        {
+          id: "project-todo-seed-creative-directive-objective-targets-real-story-file",
+          label: "Creative directive objective seeds a real story file instead of looping to directive.md",
+          kind: "internal",
+          mode: "project_todo_seed",
+          project: {
+            name: "Fantasy Novel",
+            path: "/home/openclaw/.observer-sandbox/workspace/projects/Fantasy Novel"
+          },
+          inspection: {
+            files: [
+              "01-WORLD-FOUNDATION.md",
+              "03-CHARACTER-SCENES.md",
+              "04-MAIN-MANUSCRIPT.md",
+              "directive.md"
+            ],
+            directories: [],
+            hasReadme: true,
+            hasPackageJson: false,
+            hasSource: false,
+            hasTests: false,
+            hasTodoMarkers: false
+          },
+          directiveState: {
+            authoritative: true,
+            path: "directive.md",
+            fileName: "directive.md",
+            objectiveText: "Develop setting establishment for the Fantasy Novel project.",
+            uncheckedItems: [],
+            checkedItems: []
+          },
+          expectedIncludes: [
+            "- [ ] Inspect 01-WORLD-FOUNDATION.md and complete the directive objective with one concrete writing pass: Develop setting establishment for the Fantasy Novel project."
+          ],
+          unexpectedIncludes: [
+            "Complete the directive objective in directive.md",
+            "- [ ] Inspect directive.md"
           ]
         },
         {

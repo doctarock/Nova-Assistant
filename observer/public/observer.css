@@ -1197,6 +1197,12 @@ select.input-warn {
 .panel-drawer.open {
   transform: translateX(0);
 }
+.panel-drawer.fullscreen {
+  left: 12px;
+  width: auto;
+  grid-template-columns: 46px minmax(0, 1fr);
+  transform: translateX(0);
+}
 .panel-drawer:not(.open) {
   background: transparent;
   border-color: transparent;
@@ -1671,7 +1677,13 @@ select.input-warn {
     width: auto;
     bottom: auto;
     right: auto;
+    left: auto;
     transform: none;
+    grid-template-columns: 1fr;
+  }
+  .panel-drawer.fullscreen {
+    left: auto;
+    width: auto;
     grid-template-columns: 1fr;
   }
   .drawer-content {

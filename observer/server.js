@@ -117,6 +117,7 @@ import { createObserverTaskStorage } from "./server/observer-task-storage.js";
 import { createObserverTaskStorageIo } from "./server/observer-task-storage-io.js";
 import { createObserverWorkerTools, requireNonEmptyToolContent } from "./server/observer-worker-tools.js";
 import { createVoiceDomain } from "./server/voice-domain.js";
+import { createObserverIotDomain } from "./server/observer-iot-domain.js";
 import { createNoopPluginManager, initializeObserverPluginManager } from "./server/observer-plugin-loader.js";
 import { createTaskReshapeDomain } from "./server/task-reshape-domain.js";
 import { createObserverHttpHooks } from "./server/observer-http-hooks.js";
@@ -459,6 +460,7 @@ const SKILL_REGISTRY_PATH = path.join(RUNTIME_ROOT, "skill-registry.json");
 const TOOL_REGISTRY_PATH = path.join(RUNTIME_ROOT, "tool-registry.json");
 const CAPABILITY_REQUESTS_PATH = path.join(RUNTIME_ROOT, "capability-requests.json");
 const WORDPRESS_SITE_REGISTRY_PATH = path.join(RUNTIME_ROOT, "wordpress-sites.json");
+const IOT_HA_REGISTRY_PATH = path.join(RUNTIME_ROOT, "iot-ha-instances.json");
 const SKILL_STAGING_ROOT = path.join(RUNTIME_ROOT, "skill-staging");
 const SKILL_STAGING_SKILLS_DIR = path.join(SKILL_STAGING_ROOT, "skills");
 const MAX_TASK_RESHAPE_ATTEMPTS = 3;
@@ -725,6 +727,7 @@ const {
   defaultQdrantCollection: DEFAULT_QDRANT_COLLECTION,
   defaultQdrantUrl: DEFAULT_QDRANT_URL,
   fs,
+  getIotInstances: () => iotDomain.listInstances(),
   getMailAgents: () => getMailAgents(),
   getObserverConfig: () => observerConfig,
   getPluginManager: () => pluginManager,
@@ -978,6 +981,11 @@ async function resolveOllamaLeaseResourceKey({
   if (scope === "none") {
     return "";
   }
+  const normalizedBaseUrl = normalizeOllamaBaseUrl(baseUrl);
+  const normalizedLocalBaseUrl = normalizeOllamaBaseUrl(LOCAL_OLLAMA_BASE_URL);
+  if (scope === "auto" && normalizedBaseUrl === normalizedLocalBaseUrl) {
+    return `endpoint:${normalizedBaseUrl}`;
+  }
   const explicitLane = String(laneHint || "").trim();
   if (scope !== "endpoint" && explicitLane) {
     return `lane:${explicitLane}`;
@@ -994,7 +1002,7 @@ async function resolveOllamaLeaseResourceKey({
       // Fall through to endpoint lease.
     }
   }
-  return `endpoint:${normalizeOllamaBaseUrl(baseUrl)}`;
+  return `endpoint:${normalizedBaseUrl}`;
 }
 
 async function acquireOllamaLease({
@@ -3369,6 +3377,18 @@ const {
   workspaceRoot: WORKSPACE_ROOT,
   writeVolumeText
 });
+const iotDomain = createObserverIotDomain({
+  fs,
+  path,
+  registryPath: IOT_HA_REGISTRY_PATH,
+  getSecret: (...args) => observerSecrets.getSecret(...args),
+  hasSecret: (...args) => observerSecrets.hasSecret(...args),
+  setSecret: (...args) => observerSecrets.setSecret(...args),
+  deleteSecret: (...args) => observerSecrets.deleteSecret(...args),
+  // Lazy — pluginManager is assigned after iotDomain is created
+  getRunHook: () => pluginManager?.runHook?.bind(pluginManager) ?? null
+});
+
 const {
   executeWorkerToolCall,
   WORKER_TOOLS
@@ -3404,6 +3424,7 @@ const {
   runObserverToolContainerNode,
   runSandboxShell,
   searchSkillLibrary,
+  iotDomain,
   toolMoveMail,
   toolReadDocument,
   toolSendMail,
@@ -4989,6 +5010,12 @@ const {
   recoverStaleTaskDispatchLock,
   renderCreativeHandoffPacket,
   resolveSourcePathFromContainerPath,
+  runPluginHook: async (hookName, payload) => {
+    if (pluginManager && typeof pluginManager.runHook === "function") {
+      return pluginManager.runHook(hookName, payload);
+    }
+    return payload;
+  },
   runWorkerTaskPreflight,
   scheduleTaskDispatch,
   selectDispatchableQueuedTask,
@@ -5137,27 +5164,11 @@ const taskLifecycleService = {
 };
 
 async function processNextQueuedTask(...args) {
-  const startedAt = Date.now();
-  await pluginManager.runHook("queue:task-dispatch-started", {
-    at: startedAt,
-    source: "processNextQueuedTask"
-  });
   try {
-    const response = await processNextQueuedTaskExecutor(...args);
-    await pluginManager.runHook("queue:task-processed", {
-      at: Date.now(),
-      durationMs: Date.now() - startedAt,
-      source: "processNextQueuedTask",
-      ok: response?.ok !== false,
-      task: response?.task || null,
-      run: response?.run || null,
-      dispatched: response?.dispatched === true
-    });
-    return response;
+    return await processNextQueuedTaskExecutor(...args);
   } catch (error) {
     await pluginManager.runHook("queue:task-processed", {
       at: Date.now(),
-      durationMs: Date.now() - startedAt,
       source: "processNextQueuedTask",
       ok: false,
       error: String(error?.message || error || "unknown error")
@@ -5166,27 +5177,11 @@ async function processNextQueuedTask(...args) {
   }
 }
 async function processQueuedTasksToCapacity(...args) {
-  const startedAt = Date.now();
-  await pluginManager.runHook("queue:batch-started", {
-    at: startedAt,
-    source: "processQueuedTasksToCapacity"
-  });
   try {
-    const response = await processQueuedTasksToCapacityExecutor(...args);
-    const tasks = Array.isArray(response?.tasks) ? response.tasks : [];
-    await pluginManager.runHook("queue:batch-processed", {
-      at: Date.now(),
-      durationMs: Date.now() - startedAt,
-      source: "processQueuedTasksToCapacity",
-      ok: response?.ok !== false,
-      tasks,
-      count: tasks.length
-    });
-    return response;
+    return await processQueuedTasksToCapacityExecutor(...args);
   } catch (error) {
     await pluginManager.runHook("queue:batch-processed", {
       at: Date.now(),
-      durationMs: Date.now() - startedAt,
       source: "processQueuedTasksToCapacity",
       ok: false,
       tasks: [],
@@ -5289,6 +5284,7 @@ const pluginRuntimeContext = {
   taskLifecycleService,
   taskQueueRoot: TASK_QUEUE_ROOT,
   wordpressSiteRegistryPath: WORDPRESS_SITE_REGISTRY_PATH,
+  iotDomain,
   writeContainerTextFile,
   writeVolumeText
 };
@@ -5379,6 +5375,48 @@ const tickObserverCronQueueRuntime = async (...args) => {
     throw error;
   }
 };
+
+// --- IoT / Home Assistant routes ---
+const __iotSecretsTabPath = path.join(__dirname, "server", "plugins", "iot", "public", "iot-secrets-tab.js");
+app.get("/api/plugin-ui/iot/secrets-tab.js", (_req, res) => {
+  res.type("application/javascript");
+  res.sendFile(__iotSecretsTabPath);
+});
+app.get("/api/iot/instances", async (_req, res) => {
+  try {
+    res.json({ ok: true, instances: await iotDomain.listInstances() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err || "failed to list instances") });
+  }
+});
+app.post("/api/iot/instances", async (req, res) => {
+  try {
+    noteInteractiveActivity();
+    res.json({ ok: true, instance: await iotDomain.saveInstance(req.body || {}) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err || "failed to save instance") });
+  }
+});
+app.delete("/api/iot/instances/:instanceId", async (req, res) => {
+  try {
+    noteInteractiveActivity();
+    const instanceId = String(req.params?.instanceId || "").trim();
+    if (!instanceId) return res.status(400).json({ ok: false, error: "instanceId is required" });
+    res.json({ ok: true, removed: await iotDomain.removeInstance({ instanceId }) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err || "failed to remove instance") });
+  }
+});
+app.post("/api/iot/instances/:instanceId/test", async (req, res) => {
+  try {
+    const instanceId = String(req.params?.instanceId || "").trim();
+    const result = await iotDomain.testConnection({ instanceId, ...(req.body || {}) });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err || "connection test failed") });
+  }
+});
+// --- end IoT routes ---
 
 await composeObserverServer({
   runtimeRouteArgs: {

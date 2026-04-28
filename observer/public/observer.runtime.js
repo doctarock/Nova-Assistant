@@ -586,6 +586,9 @@ function syncQuestionTimeAfterQueueLoad(waiting = []) {
     if (activeTaskId) {
       waitingQuestionAnswerDrafts.delete(activeTaskId);
     }
+    if (typeof window.clearPendingVoiceQuestionInvite === "function") {
+      window.clearPendingVoiceQuestionInvite({ preserveStatus: true });
+    }
     if (typeof window.clearPendingVoiceQuestionWindow === "function") {
       window.clearPendingVoiceQuestionWindow({ preserveStatus: true, preserveQuestionTime: true });
     }
@@ -615,9 +618,16 @@ function renderWaitingQuestionsPanel(waiting = [], options = {}) {
     return;
   }
   const questions = Array.isArray(waiting) ? waiting : [];
+  const invitedTaskStillPresent = questions.some((entry) => String(entry?.id || "").trim() === String(pendingVoiceQuestionInviteTaskId || "").trim());
+  if (!invitedTaskStillPresent && typeof window.clearPendingVoiceQuestionInvite === "function") {
+    window.clearPendingVoiceQuestionInvite({ preserveStatus: true });
+  }
   const task = pickActiveWaitingQuestion(questions);
   if (!task) {
     activeWaitingQuestionTaskId = "";
+    if (typeof window.clearPendingVoiceQuestionInvite === "function") {
+      window.clearPendingVoiceQuestionInvite({ preserveStatus: true });
+    }
     taskQueueWaitingEl.innerHTML = `<div class="panel-subtle">No questions waiting.</div>`;
     return;
   }
@@ -846,6 +856,13 @@ async function loadTaskQueue() {
     const failed = Array.isArray(j.failed) ? j.failed : [];
     const repairMonitor = j.repairMonitor && typeof j.repairMonitor === "object" ? j.repairMonitor : {};
     latestTaskSnapshot = { queued, waiting, inProgress, done, failed, repairMonitor };
+    window.dispatchEvent(new CustomEvent("observer:task-snapshot", {
+      detail: {
+        ...latestTaskSnapshot,
+        source: "loadTaskQueue",
+        at: Date.now()
+      }
+    }));
     syncInProgressTaskUpdates(inProgress);
     renderTaskList(taskQueueQueuedEl, queued);
     renderWaitingQuestionsPanel(waiting);
@@ -907,6 +924,9 @@ function replayWaitingQuestionThroughAvatar() {
     hintEl.textContent = "There is no active waiting question to replay.";
     return false;
   }
+  if (typeof window.clearPendingVoiceQuestionInvite === "function") {
+    window.clearPendingVoiceQuestionInvite({ preserveStatus: true });
+  }
   const narration = buildTaskNarration(task);
   activeWaitingQuestionTaskId = String(task.id || "").trim();
   if (typeof setQuestionTimeActive === "function") {
@@ -933,6 +953,59 @@ function replayWaitingQuestionThroughAvatar() {
   activateTab("novaTab");
   activateNovaSubtab("novaQuestionsPanel");
   hintEl.textContent = "Replaying the active question through the avatar.";
+  return true;
+}
+
+function buildVoiceQuestionInvitation(task = {}) {
+  const taskRef = String(task.codename || formatEntityRef("task", task.id || "unknown")).trim();
+  const botName = getBotName();
+  const variants = [
+    `I have a question about ${taskRef}. Do you have a moment? Say yes ${botName} and I'll ask it.`,
+    `Quick check in. I have a question waiting for ${taskRef}. If now works, say yes ${botName}.`,
+    `I need your direction on ${taskRef}. Say yes ${botName} when you have a moment and I'll start question time.`,
+    `I have a follow up question. If you're ready, say yes ${botName} and I'll ask it.`
+  ];
+  const seed = hashId([
+    task.id || "",
+    task.updatedAt || task.createdAt || 0,
+    task.questionForUser || ""
+  ].join(":"));
+  return annotateNovaEmotion(variants[seed % variants.length], "shrug");
+}
+
+function queueVoiceQuestionInvitation(task = {}) {
+  if (!task?.id || String(task.status || "") !== "waiting_for_user") {
+    return false;
+  }
+  if (!voiceListeningEnabled || !speechRecognitionSupported) {
+    return false;
+  }
+  const taskId = String(task.id || "").trim();
+  if (!taskId) {
+    return false;
+  }
+  if (
+    String(pendingVoiceQuestionInviteTaskId || "").trim() === taskId
+    || String(pendingVoiceQuestionTaskId || "").trim() === taskId
+  ) {
+    return true;
+  }
+  const narration = buildTaskNarration(task);
+  enqueueUpdate({
+    source: "task",
+    title: "Question waiting",
+    displayText: narration.displayText,
+    spokenText: buildVoiceQuestionInvitation(task),
+    status: task.status || "",
+    brainLabel: task.requestedBrainLabel || task.requestedBrainId || "",
+    model: task.model || "",
+    onComplete: () => {
+      if (typeof window.armPendingVoiceQuestionInvite === "function") {
+        window.armPendingVoiceQuestionInvite(task);
+      }
+    }
+  }, { priority: true });
+  hintEl.textContent = "Nova is waiting for a spoken yes before starting question time.";
   return true;
 }
 
@@ -1545,6 +1618,13 @@ async function loadCronJobs() {
     const r = await fetch("/api/cron/list");
     const j = await r.json();
     const jobs = Array.isArray(j.jobs) ? j.jobs : [];
+    window.dispatchEvent(new CustomEvent("observer:cron-state", {
+      detail: {
+        jobs,
+        at: Date.now(),
+        source: "loadCronJobs"
+      }
+    }));
     if (!jobs.length) {
       cronListEl.textContent = "No scheduled jobs found.";
       return;
@@ -1588,6 +1668,14 @@ async function loadCronJobs() {
       button.onclick = () => removeCronJob(button.dataset.cronRemove);
     });
   } catch (error) {
+    window.dispatchEvent(new CustomEvent("observer:cron-state", {
+      detail: {
+        jobs: [],
+        at: Date.now(),
+        source: "loadCronJobs",
+        error: String(error?.message || error || "cron load failed")
+      }
+    }));
     cronListEl.textContent = `Failed to load scheduled jobs: ${error.message}`;
   }
 }
@@ -1843,6 +1931,9 @@ function reportTaskEvent(task, explicitTitle = "", options = {}) {
   if (questionTimeActive && task?.status === "waiting_for_user") {
     return;
   }
+  if (task.status === "waiting_for_user" && queueVoiceQuestionInvitation(task)) {
+    return;
+  }
   const narration = buildTaskNarration(task);
   const title = explicitTitle || narration.title;
   enqueueUpdate({
@@ -1976,6 +2067,13 @@ async function refreshStatus() {
     }
     const brainActivity = Array.isArray(j.brainActivity) ? j.brainActivity : [];
     lastBrainActivity = brainActivity;
+    window.dispatchEvent(new CustomEvent("observer:brain-activity", {
+      detail: {
+        brainActivity,
+        source: "refreshStatus",
+        at: Date.now()
+      }
+    }));
     if (!brainActivity.length) {
       brainLoadStatusEl.innerHTML = `<div class="panel-subtle">No brain activity available.</div>`;
     } else {
@@ -4901,6 +4999,13 @@ async function loadPluginManagerPanel(options = {}) {
   if (!pluginsHintEl) {
     return;
   }
+  window.dispatchEvent(new CustomEvent("observer:plugin-load-state", {
+    detail: {
+      phase: "started",
+      at: Date.now(),
+      source: "loadPluginManagerPanel"
+    }
+  }));
   if (!options.silent) {
     pluginsHintEl.textContent = "Loading plugin manager...";
   }
@@ -4914,6 +5019,14 @@ async function loadPluginManagerPanel(options = {}) {
     catalog = cloneJson(j);
   } catch (error) {
     pluginCatalogDraft = null;
+    window.dispatchEvent(new CustomEvent("observer:plugin-load-state", {
+      detail: {
+        phase: "failed",
+        at: Date.now(),
+        source: "loadPluginManagerPanel",
+        error: String(error?.message || error || "failed to load plugin manager")
+      }
+    }));
     await renderPluginTopLevelTabs();
     await renderPluginNovaTabs();
     await renderPluginSecretsTabs();
@@ -4976,6 +5089,15 @@ async function loadPluginManagerPanel(options = {}) {
   const pluginCount = getInstalledPlugins().length;
   const capabilityCount = Array.isArray(pluginCatalogDraft?.capabilities) ? pluginCatalogDraft.capabilities.length : 0;
   pluginsHintEl.textContent = `Loaded ${pluginCount} plugin${pluginCount === 1 ? "" : "s"} with ${capabilityCount} ${capabilityCount === 1 ? "capability" : "capabilities"}.`;
+  window.dispatchEvent(new CustomEvent("observer:plugin-load-state", {
+    detail: {
+      phase: "completed",
+      at: Date.now(),
+      source: "loadPluginManagerPanel",
+      pluginCount,
+      capabilityCount
+    }
+  }));
   if (options.loadDiagnostics !== false) {
     const taskLifecyclePromise = getPluginLifecycleTaskId()
       ? loadPluginTaskLifecycleOutput()
@@ -5397,6 +5519,7 @@ observerEvents.onmessage = (ev) => {
     return;
   }
   if (typeof data.type === "string" && !data.task) {
+    window.dispatchEvent(new CustomEvent("observer:event", { detail: data }));
     for (const [prefix, handler] of pluginEventHandlers) {
       if (data.type === prefix || data.type.startsWith(`${prefix}.`)) {
         handler(data);
@@ -5411,12 +5534,14 @@ observerEvents.onmessage = (ev) => {
   latestTaskEventTs = Math.max(latestTaskEventTs, Number(data.task.updatedAt || data.task.createdAt || 0));
   saveEventCursor(TASK_CURSOR_KEY, latestTaskEventTs);
   if (data.type === "task.progress") {
+    window.dispatchEvent(new CustomEvent("observer:task-event", { detail: data }));
     if (observerApp.isRemoteParallelMode && observerApp.isRemoteParallelMode()) {
       observerApp.loadTaskQueue();
       return;
     }
     observerApp.reportTaskEvent(data.task);
   } else if (data.type === "task.completed" || data.type === "task.escalated" || data.type === "task.recovered") {
+    window.dispatchEvent(new CustomEvent("observer:task-event", { detail: data }));
     observerApp.reportTaskEvent(data.task);
     taskJobTypeCompletedHandlers.get(String(data.task?.internalJobType || ""))?.(data.task);
   }

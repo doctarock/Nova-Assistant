@@ -63,6 +63,7 @@ export function createObserverQueueProcessor(context = {}) {
     recoverStaleTaskDispatchLock,
     renderCreativeHandoffPacket,
     resolveSourcePathFromContainerPath,
+    runPluginHook = async (_, payload) => payload,
     runWorkerTaskPreflight,
     scheduleTaskDispatch,
     selectDispatchableQueuedTask,
@@ -183,6 +184,17 @@ export function createObserverQueueProcessor(context = {}) {
         reason: `Task dispatched to ${brain.label || brain.id}.`
       });
       const inProgressPath = inProgressTask.filePath;
+      await runPluginHook("queue:task-dispatch-started", {
+        at: startedAt,
+        taskId: String(inProgressTask.id || "").trim(),
+        sessionId: String(inProgressTask.sessionId || "").trim(),
+        brainId: String(brain?.id || inProgressTask.requestedBrainId || "").trim(),
+        brainLabel: String(brain?.label || inProgressTask.requestedBrainLabel || "").trim(),
+        queueLane: String(inProgressTask.queueLane || "").trim(),
+        dispatchCount: Number(inProgressTask.dispatchCount || 0) || 0,
+        internalJobType: String(inProgressTask.internalJobType || "").trim(),
+        task: inProgressTask
+      }).catch(() => {});
 
       if (remoteParallel) {
         setTaskDispatchInFlight(false);
@@ -723,6 +735,18 @@ export function createObserverQueueProcessor(context = {}) {
         task: finalTask,
         run: runResponse
       };
+      await runPluginHook("queue:task-processed", {
+        at: Date.now(),
+        ok: response.ok === true,
+        taskId: String(finalTask?.id || "").trim(),
+        sessionId: String(finalTask?.sessionId || "").trim(),
+        status: String(finalTask?.status || "").trim(),
+        durationMs: Math.max(0, Date.now() - startedAt),
+        brainId: String(brain?.id || finalTask?.requestedBrainId || "").trim(),
+        brainLabel: String(brain?.label || finalTask?.requestedBrainLabel || "").trim(),
+        task: finalTask,
+        run: runResponse
+      }).catch(() => {});
       if (finalTask.status !== "closed" && !finalTask.silentInternalSkip) {
         if (!(finalTask.status === "waiting_for_user" && isTodoBackedWaitingTask(finalTask))) {
           broadcastObserverEvent({
@@ -742,11 +766,15 @@ export function createObserverQueueProcessor(context = {}) {
   }
 
   async function processQueuedTasksToCapacity() {
+    const batchStartedAt = Date.now();
+    await runPluginHook("queue:batch-started", {
+      at: batchStartedAt
+    }).catch(() => {});
     const startedTasks = [];
     while (true) {
       const response = await processNextQueuedTask();
       if (!response.dispatched) {
-        return {
+        const result = {
           ok: true,
           dispatched: startedTasks.length > 0,
           startedCount: startedTasks.length,
@@ -755,18 +783,38 @@ export function createObserverQueueProcessor(context = {}) {
             ? `Started ${startedTasks.length} queued task(s).`
             : response.message
         };
+        await runPluginHook("queue:batch-processed", {
+          at: Date.now(),
+          startedAt: batchStartedAt,
+          durationMs: Math.max(0, Date.now() - batchStartedAt),
+          ok: true,
+          dispatched: result.dispatched === true,
+          startedCount: result.startedCount,
+          tasks: startedTasks
+        }).catch(() => {});
+        return result;
       }
       if (response.task) {
         startedTasks.push(response.task);
       }
       if (!(await isRemoteParallelDispatchEnabled())) {
-        return {
+        const result = {
           ok: true,
           dispatched: true,
           startedCount: startedTasks.length,
           tasks: startedTasks,
           message: `Started ${startedTasks.length} queued task(s).`
         };
+        await runPluginHook("queue:batch-processed", {
+          at: Date.now(),
+          startedAt: batchStartedAt,
+          durationMs: Math.max(0, Date.now() - batchStartedAt),
+          ok: true,
+          dispatched: true,
+          startedCount: result.startedCount,
+          tasks: startedTasks
+        }).catch(() => {});
+        return result;
       }
     }
   }

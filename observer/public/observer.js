@@ -38,6 +38,7 @@ const {
   loadRegressionSuites,
   loadToolConfig,
   loadPanelOpenPreference,
+  loadPanelFullscreenPreference,
   loadStateInspector,
   loadRuntimeOptions,
   loadTaskFiles,
@@ -61,6 +62,7 @@ const {
   refreshRegressionCommandUi,
   runRegressionSuites,
   setPanelOpen,
+  setPanelFullscreen,
   setQueuePaused,
   showQueuedUpdate,
   speakAcknowledgement,
@@ -73,6 +75,23 @@ const {
   addCustomBrainDraft,
   saveBrainConfig
 } = observerApp;
+
+function isWorkerLikeBrain(brain = {}) {
+  const id = String(brain?.id || "").trim().toLowerCase();
+  const label = String(brain?.label || "").trim().toLowerCase();
+  const kind = String(brain?.kind || "").trim().toLowerCase();
+  return id.includes("worker") || label.includes("worker") || kind === "worker";
+}
+
+function dispatchDirectWorkerHandoff(phase = "started", detail = {}) {
+  window.dispatchEvent(new CustomEvent("observer:intake-worker-handoff", {
+    detail: {
+      phase,
+      at: Date.now(),
+      ...detail
+    }
+  }));
+}
 
 const startAgentRun = async (messageOverride = "", options = {}) => {
   unlockSpeech();
@@ -110,6 +129,7 @@ const startAgentRun = async (messageOverride = "", options = {}) => {
   hintEl.textContent = "Agent run in progress.";
 
   let attachments = [];
+  let directWorkerHandoffActive = false;
 
   try {
     const shouldRoute = queueHandoffEl.checked && ["bitnet", "worker"].includes(brain?.id || "");
@@ -264,6 +284,15 @@ const startAgentRun = async (messageOverride = "", options = {}) => {
     const adminFetch = typeof observerApp.adminFetch === "function"
       ? observerApp.adminFetch.bind(observerApp)
       : fetch;
+    directWorkerHandoffActive = isWorkerLikeBrain(brain);
+    if (directWorkerHandoffActive) {
+      dispatchDirectWorkerHandoff("started", {
+        message: effectiveMessage,
+        brainId: brain?.id || "worker",
+        brainLabel: brain?.label || "Worker",
+        source: "direct-run"
+      });
+    }
     const r = await adminFetch("/api/agent/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -319,12 +348,37 @@ const startAgentRun = async (messageOverride = "", options = {}) => {
       fileInputEl.value = "";
       renderAttachmentList();
     }
+    if (directWorkerHandoffActive) {
+      dispatchDirectWorkerHandoff("completed", {
+        ok: j.ok === true,
+        brainId: j.brain?.id || brain?.id || "worker",
+        brainLabel: j.brain?.label || brain?.label || "Worker",
+        source: "direct-run"
+      });
+      directWorkerHandoffActive = false;
+    }
   } catch (error) {
+    if (directWorkerHandoffActive) {
+      dispatchDirectWorkerHandoff("failed", {
+        error: String(error?.message || error || "request failed"),
+        brainId: brain?.id || "worker",
+        brainLabel: brain?.label || "Worker",
+        source: "direct-run"
+      });
+      directWorkerHandoffActive = false;
+    }
     runStatusEl.textContent = "error";
     payloadsEl.innerHTML = `<div class="payload">Request failed: ${escapeHtml(error.message)}</div>`;
     resultEl.textContent = String(error);
     hintEl.textContent = "Interface request failed before a response was returned.";
   } finally {
+    if (directWorkerHandoffActive) {
+      dispatchDirectWorkerHandoff("completed", {
+        brainId: brain?.id || "worker",
+        brainLabel: brain?.label || "Worker",
+        source: "direct-run"
+      });
+    }
     runInFlight = false;
     updateRunButtonState();
     refreshStatus();
@@ -574,6 +628,7 @@ if (refreshPluginCronBtn) {
 addBrainEndpointBtn.onclick = addBrainEndpointDraft;
 addCustomBrainBtn.onclick = addCustomBrainDraft;
 setPanelOpen(loadPanelOpenPreference());
+setPanelFullscreen(loadPanelFullscreenPreference());
 applyTabIcons();
 
 panelToggleBtn.onclick = () => {
@@ -581,7 +636,7 @@ panelToggleBtn.onclick = () => {
 };
 
 panelCloseBtn.onclick = () => {
-  setPanelOpen(false);
+  setPanelFullscreen(!panelDrawerEl.classList.contains("fullscreen"));
 };
 
 tabButtons.forEach((button) => {

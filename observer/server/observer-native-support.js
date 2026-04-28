@@ -40,8 +40,56 @@ export function createObserverNativeSupport(context = {}) {
     writeVolumeText
   } = context;
 
+  function toTitleCase(value = "") {
+    return String(value || "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b[a-z]/g, (match) => match.toUpperCase());
+  }
+
+  function describeTaskSubject(task) {
+    const projectTitle = String(task?.projectName || task?.projectTitle || "").trim();
+    if (projectTitle) {
+      return projectTitle;
+    }
+    const taskLabel = String(task?.taskLabel || "").trim();
+    if (taskLabel) {
+      return taskLabel;
+    }
+    const internalJobType = String(task?.internalJobType || "").trim();
+    if (internalJobType) {
+      return toTitleCase(internalJobType);
+    }
+    return task?.codename || task?.id || "task";
+  }
+
+  function summarizeLowSignalTask(task) {
+    const subject = describeTaskSubject(task);
+    const internalJobType = String(task?.internalJobType || "").trim().toLowerCase();
+    const combined = [
+      task?.toolLoopDiagnostics?.summary,
+      task?.reviewSummary,
+      task?.resultSummary,
+      task?.workerSummary,
+      task?.notes,
+      task?.message
+    ].filter(Boolean).join(" ");
+    const normalized = combined.toLowerCase();
+
+    if (internalJobType === "idle_opportunity_scan" || /idle opportunity scan report:/i.test(normalized)) {
+      return String(task?.projectName || task?.projectTitle || "").trim()
+        ? `Reviewed idle opportunities for ${subject}.`
+        : "Reviewed idle opportunities and queued follow-up work where useful.";
+    }
+    if (internalJobType === "project_cycle" && String(task?.projectName || "").trim()) {
+      return `Advanced work on ${subject}.`;
+    }
+    return "";
+  }
+
   function summarizeTaskActivity(task) {
-    const subject = task.codename || task.id || "task";
+    const subject = describeTaskSubject(task);
     const message = compactTaskText(task.message, 110);
     if (message) {
       return `${subject}: ${message}`;
@@ -50,8 +98,17 @@ export function createObserverNativeSupport(context = {}) {
   }
 
   function summarizeTaskOutcome(task) {
-    const subject = task.codename || task.id || "task";
-    const summary = compactTaskText(task.reviewSummary || task.resultSummary || task.notes || task.message, 130);
+    const subject = describeTaskSubject(task);
+    const lowSignalFallback = summarizeLowSignalTask(task);
+    const summary = compactTaskText(
+      task.reviewSummary
+      || task.resultSummary
+      || task.workerSummary
+      || lowSignalFallback
+      || task.notes
+      || task.message,
+      130
+    );
     if (summary) {
       return `${subject}: ${summary}`;
     }
@@ -256,15 +313,35 @@ export function createObserverNativeSupport(context = {}) {
           .map((file) => file?.path || file?.name)
           .filter(Boolean);
         if (topOutputs.length) {
-          return `${task.codename || task.id}, which produced ${humanJoin(topOutputs)}`;
+          return `${describeTaskSubject(task)}, which produced ${humanJoin(topOutputs)}`;
         }
       }
       return summarizeTaskOutcome(task);
     });
     const recentCronMentions = cronEventSummaries.slice(0, 3);
 
+    const agent = getActiveMailAgent();
+    const mailState = getMailState();
+    const mailWatchRulesState = getMailWatchRulesState();
+    const recentMessages = (Array.isArray(mailState?.recentMessages) ? mailState.recentMessages : [])
+      .filter((entry) => entry.agentId === agent?.id)
+      .filter((entry) => Number(entry.receivedAt || 0) >= sinceMs)
+      .sort((left, right) => Number(right.receivedAt || 0) - Number(left.receivedAt || 0));
+    const visibleMessages = recentMessages.filter((message) => !message?.triage?.likelySpam && !message?.triage?.likelyPhishing);
+    const pendingUnsureIds = new Set(
+      (Array.isArray(mailWatchRulesState?.rules) ? mailWatchRulesState.rules : [])
+        .filter((rule) => rule?.enabled !== false)
+        .flatMap((rule) => Array.isArray(rule?.pendingUnsureMessageIds) ? rule.pendingUnsureMessageIds : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    );
+    const heldMessages = visibleMessages.filter((message) => pendingUnsureIds.has(String(message?.id || "").trim()));
+
     const headlineParts = [];
+    if (recentDone.length) headlineParts.push(`completed ${recentDone.length} task${recentDone.length === 1 ? "" : "s"}`);
     if (recentTaskMentions.length) headlineParts.push(`worked on ${humanJoin(recentTaskMentions)}`);
+    if (visibleMessages.length) headlineParts.push(`received ${visibleMessages.length} non-spam email${visibleMessages.length === 1 ? "" : "s"}`);
+    if (heldMessages.length) headlineParts.push(`held ${heldMessages.length} for your review`);
     if (recentCronMentions.length) headlineParts.push(`saw ${recentCronMentions.length} scheduled job run${recentCronMentions.length === 1 ? "" : "s"} complete`);
     if (currentInProgress.length) headlineParts.push(`${currentInProgress.length} still in progress`);
     if (recentFailed.length) headlineParts.push(`${recentFailed.length} failed`);
@@ -300,6 +377,21 @@ export function createObserverNativeSupport(context = {}) {
       }
     } else {
       lines.push("Scheduled jobs and outcomes: no scheduled runs have completed in the last day.");
+    }
+
+    if (visibleMessages.length) {
+      lines.push("Inbox and mail activity:");
+      lines.push(`- ${visibleMessages.length} non-spam email${visibleMessages.length === 1 ? "" : "s"} received in the last day.`);
+      if (heldMessages.length) {
+        lines.push(`- ${heldMessages.length} email${heldMessages.length === 1 ? "" : "s"} are waiting for your direction.`);
+      }
+      for (const message of visibleMessages.slice(0, 3)) {
+        const sender = message.fromName || message.fromAddress || "Unknown sender";
+        const subject = String(message.subject || "(no subject)").trim();
+        lines.push(`- ${sender}: ${subject}`);
+      }
+    } else {
+      lines.push("Inbox and mail activity: no non-spam email activity in the last day.");
     }
 
     if (uniqueArtifacts.length) {

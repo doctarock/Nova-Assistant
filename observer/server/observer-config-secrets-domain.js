@@ -8,6 +8,7 @@ export function createObserverConfigSecretsDomain(options = {}) {
     fs = null,
     getMailAgents = () => [],
     getObserverConfig = () => ({}),
+    getIotInstances = async () => [],
     getPluginManager = () => null,
     hasMailPassword = async () => false,
     invalidateObserverConfigCaches = () => {},
@@ -118,6 +119,7 @@ export function createObserverConfigSecretsDomain(options = {}) {
       hasSecret: await hasMailPassword(agent),
       active: String(observerConfig?.mail?.activeAgentId || "").trim() === agent.id
     })));
+    const iotInstances = await Promise.resolve().then(() => getIotInstances()).catch(() => []);
     const pluginManager = getPluginManager();
     const listWordPressSitesCapability = pluginManager?.getCapability?.("wordpress.listSites");
     const buildWordPressSecretsCatalogCapability = pluginManager?.getCapability?.("wordpress.buildSecretsCatalogData");
@@ -139,6 +141,9 @@ export function createObserverConfigSecretsDomain(options = {}) {
       wordpress: {
         sites: wordpressSites
       },
+      iot: {
+        instances: Array.isArray(iotInstances) ? iotInstances : []
+      },
       retrieval: {
         qdrantUrl: retrieval.qdrantUrl,
         collectionName: retrieval.collectionName,
@@ -150,7 +155,10 @@ export function createObserverConfigSecretsDomain(options = {}) {
         ...mailAgents.map((agent) => agent.passwordHandle),
         ...(Array.isArray(wordpressSecretsCatalog?.handles)
           ? wordpressSecretsCatalog.handles
-          : wordpressSites.map((site) => String(site.sharedSecretHandle || "").trim()).filter(Boolean))
+          : wordpressSites.map((site) => String(site.sharedSecretHandle || "").trim()).filter(Boolean)),
+        ...(Array.isArray(iotInstances)
+          ? iotInstances.map((inst) => String(inst.tokenHandle || "").trim()).filter(Boolean)
+          : [])
       ].filter(Boolean)
     };
   }

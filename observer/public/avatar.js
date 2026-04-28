@@ -113,7 +113,8 @@ const state = {
   filmPass: null,
   rgbShiftPass: null,
   vignettePass: null,
-  pixelPass: null
+  pixelPass: null,
+  sceneAddons: new Set()
 };
 
 function buildReactionConfig(profile = {}) {
@@ -212,6 +213,63 @@ function renderFrame() {
     return;
   }
   state.renderer.render(state.scene, state.camera);
+}
+
+function buildSceneAddonContext() {
+  return {
+    THREE,
+    scene: state.scene,
+    camera: state.camera,
+    renderer: state.renderer,
+    model: state.model,
+    canvas,
+    renderFrame
+  };
+}
+
+function initializeSceneAddon(addon) {
+  if (!addon || typeof addon !== "object" || addon.__agentAvatarInitialized) {
+    return;
+  }
+  if (!state.scene || !state.camera || !state.renderer) {
+    return;
+  }
+  addon.__agentAvatarInitialized = true;
+  try {
+    addon.init?.(buildSceneAddonContext());
+  } catch (error) {
+    console.warn("avatar scene addon failed to initialize", error);
+  }
+}
+
+function notifyAvatarModelChanged() {
+  for (const addon of state.sceneAddons) {
+    if (!addon || typeof addon !== "object") {
+      continue;
+    }
+    initializeSceneAddon(addon);
+    try {
+      addon.onAvatarChanged?.(buildSceneAddonContext());
+    } catch (error) {
+      console.warn("avatar scene addon failed during avatar change", error);
+    }
+  }
+}
+
+function registerSceneAddon(addon) {
+  if (!addon || typeof addon !== "object") {
+    return () => {};
+  }
+  state.sceneAddons.add(addon);
+  initializeSceneAddon(addon);
+  return () => {
+    state.sceneAddons.delete(addon);
+    try {
+      addon.dispose?.(buildSceneAddonContext());
+    } catch (error) {
+      console.warn("avatar scene addon failed to dispose", error);
+    }
+  };
 }
 
 function initPostProcessing() {
@@ -741,12 +799,22 @@ function prepareResponseText(text) {
 function animate() {
   requestAnimationFrame(animate);
   state.timer.update();
+  const delta = state.timer.getDelta();
   if (state.mixer) {
-    state.mixer.update(state.timer.getDelta());
+    state.mixer.update(delta);
   }
   if (state.skyDome && state.camera) {
     state.skyDome.position.copy(state.camera.position);
     state.skyDome.rotation.y += 0.00016;
+  }
+  for (const addon of state.sceneAddons) {
+    initializeSceneAddon(addon);
+    try {
+      addon.update?.(delta, buildSceneAddonContext());
+    } catch (error) {
+      console.warn("avatar scene addon failed during update", error);
+      state.sceneAddons.delete(addon);
+    }
   }
   renderFrame();
 }
@@ -846,6 +914,7 @@ async function loadAvatarModel() {
   );
   populateOptions();
   playClip(state.idleClip);
+  notifyAvatarModelChanged();
   renderFrame();
   setStatus(`${state.actions.size} animations ready`);
 }
@@ -954,6 +1023,8 @@ window.agentAvatar = {
   beginSpeech,
   endSpeech,
   reloadAppearance,
+  registerSceneAddon,
+  getSceneContext: buildSceneAddonContext,
   options: { ...state.reactionConfig.emotionToClip }
 };
 

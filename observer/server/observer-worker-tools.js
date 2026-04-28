@@ -1,5 +1,6 @@
 export function createObserverWorkerTools(options = {}) {
   const {
+    iotDomain = null,
     PROMPT_MEMORY_PERSONAL_DAILY_ROOT = "",
     OBSERVER_CONTAINER_INPUT_ROOT = "",
     TASK_QUEUE_IN_PROGRESS = "",
@@ -352,6 +353,69 @@ async function toolWordPressUpsertPost(args = {}) {
   return await getWordPressCapabilityOrThrow("wordpress.upsertPost")(args);
 }
 
+function requireIotDomain() {
+  if (!iotDomain || typeof iotDomain !== "object") throw new Error("IoT (Home Assistant) is not available");
+  return iotDomain;
+}
+
+async function toolIotHaListInstances() {
+  const instances = await requireIotDomain().listInstances();
+  return {
+    text: instances.length ? `${instances.length} Home Assistant instance${instances.length === 1 ? "" : "s"} configured.` : "No Home Assistant instances configured.",
+    instances
+  };
+}
+
+async function toolIotHaSaveInstance(args = {}) {
+  return requireIotDomain().saveInstance(args);
+}
+
+async function toolIotHaRemoveInstance(args = {}) {
+  return requireIotDomain().removeInstance(args);
+}
+
+async function toolIotHaTestConnection(args = {}) {
+  return requireIotDomain().testConnection(args);
+}
+
+async function toolIotListDevices(args = {}) {
+  return requireIotDomain().listDevices(args);
+}
+
+async function toolIotGetState(args = {}) {
+  return requireIotDomain().getState(args);
+}
+
+async function toolIotCallService(args = {}) {
+  return requireIotDomain().callService(args);
+}
+
+async function toolIotTurnOn(args = {}) {
+  return requireIotDomain().turnOn(args);
+}
+
+async function toolIotTurnOff(args = {}) {
+  return requireIotDomain().turnOff(args);
+}
+
+async function toolIotToggle(args = {}) {
+  return requireIotDomain().toggle(args);
+}
+
+async function toolIotCallHa(args = {}) {
+  const instanceId = String(args.instanceId || "").trim() || "default";
+  const haPath = String(args.path || "").trim();
+  if (!haPath) throw new Error("path is required (e.g. /api/states or /api/services/light/turn_on)");
+  const method = String(args.method || "GET").trim().toUpperCase();
+  const body = args.body && typeof args.body === "object" ? args.body : null;
+  return requireIotDomain().callHaForInstance(instanceId, {
+    method,
+    path: haPath,
+    body,
+    timeoutMs: Number(args.timeoutMs || 15000)
+  });
+}
+
 const WORKER_TOOLS = [
   { name: "list_files", description: "List files in a directory", parameters: { path: "string", recursive: "boolean", limit: "number" } },
   { name: "read_document", description: "Read and normalize a document from a path or url. Cleans markdown/html/json/email-like content into a consumable text view and returns it in chunks.", parameters: { path: "string", url: "string", offset: "number", maxChars: "number", contentType: "string" } },
@@ -371,7 +435,18 @@ const WORKER_TOOLS = [
   { name: "export_pdf", description: "Export text to a PDF file", parameters: { path: "string", text: "string" } },
   { name: "read_pdf", description: "Read text from a PDF document", parameters: { path: "string" } },
   { name: "zip", description: "Zip a file or directory", parameters: { source: "string", destination: "string" } },
-  { name: "unzip", description: "Unzip a zip archive", parameters: { source: "string", destination: "string" } }
+  { name: "unzip", description: "Unzip a zip archive", parameters: { source: "string", destination: "string" } },
+  { name: "iot_ha_list_instances", description: "List configured Home Assistant instances." },
+  { name: "iot_ha_save_instance", description: "Add or update a Home Assistant instance with its base URL and long-lived access token.", parameters: { instanceId: "string", label: "string", baseUrl: "string", token: "string" } },
+  { name: "iot_ha_remove_instance", description: "Remove a configured Home Assistant instance.", parameters: { instanceId: "string" } },
+  { name: "iot_ha_test_connection", description: "Test the connection to a configured Home Assistant instance.", parameters: { instanceId: "string", timeoutMs: "number" } },
+  { name: "iot_list_devices", description: "List IoT device entity states from Home Assistant, optionally filtered by domain (e.g. light, switch, climate, sensor).", parameters: { instanceId: "string", domain: "string", timeoutMs: "number" } },
+  { name: "iot_get_state", description: "Get the current state and attributes of a Home Assistant entity by entity_id (e.g. light.living_room).", parameters: { instanceId: "string", entityId: "string", timeoutMs: "number" } },
+  { name: "iot_call_service", description: "Call any Home Assistant service (e.g. domain=light service=turn_on). Use for advanced control not covered by iot_turn_on/off/toggle.", parameters: { instanceId: "string", domain: "string", service: "string", entityId: "string", serviceData: "object", timeoutMs: "number" } },
+  { name: "iot_turn_on", description: "Turn on a Home Assistant entity (light, switch, fan, etc.) by entity_id.", parameters: { instanceId: "string", entityId: "string", serviceData: "object", timeoutMs: "number" } },
+  { name: "iot_turn_off", description: "Turn off a Home Assistant entity by entity_id.", parameters: { instanceId: "string", entityId: "string", timeoutMs: "number" } },
+  { name: "iot_toggle", description: "Toggle a Home Assistant entity (on→off or off→on) by entity_id.", parameters: { instanceId: "string", entityId: "string", timeoutMs: "number" } },
+  { name: "iot_call_ha", description: "Make a raw Home Assistant REST API request. Use when core IoT tools don't cover the endpoint you need (e.g. /api/logbook, /api/calendars, /api/history).", parameters: { instanceId: "string", path: "string", method: "string", body: "object", timeoutMs: "number" } }
 ];
 
 function normalizePermissionApprovalDecision(value = "") {
@@ -534,6 +609,17 @@ async function executeWorkerToolCall(toolCall, context) {
   if (name === "read_pdf") return toolReadPdf(args);
   if (name === "zip") return toolZip(args);
   if (name === "unzip") return toolUnzip(args);
+  if (name === "iot_ha_list_instances") return toolIotHaListInstances();
+  if (name === "iot_ha_save_instance") return toolIotHaSaveInstance(args);
+  if (name === "iot_ha_remove_instance") return toolIotHaRemoveInstance(args);
+  if (name === "iot_ha_test_connection") return toolIotHaTestConnection(args);
+  if (name === "iot_list_devices") return toolIotListDevices(args);
+  if (name === "iot_get_state") return toolIotGetState(args);
+  if (name === "iot_call_service") return toolIotCallService(args);
+  if (name === "iot_turn_on") return toolIotTurnOn(args);
+  if (name === "iot_turn_off") return toolIotTurnOff(args);
+  if (name === "iot_toggle") return toolIotToggle(args);
+  if (name === "iot_call_ha") return toolIotCallHa(args);
   // Fallback: try plugin-registered intake tools (e.g. record_philosophy)
   const pm = getPluginManager();
   if (pm && typeof pm.runHook === "function") {

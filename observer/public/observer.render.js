@@ -507,6 +507,31 @@ function loadPanelOpenPreference() {
   }
 }
 
+function setPanelFullscreen(isFullscreen) {
+  if (!(panelDrawerEl instanceof HTMLElement)) {
+    return;
+  }
+  const nextFullscreen = Boolean(isFullscreen);
+  panelDrawerEl.classList.toggle("fullscreen", nextFullscreen);
+  if (panelCloseBtn) {
+    panelCloseBtn.textContent = nextFullscreen ? "Exit full screen" : "Full screen panels";
+    panelCloseBtn.setAttribute("aria-pressed", nextFullscreen ? "true" : "false");
+    panelCloseBtn.title = nextFullscreen ? "Return panels to normal width" : "Stretch panels full screen";
+    panelCloseBtn.setAttribute("aria-label", nextFullscreen ? "Exit full screen panels" : "Stretch panels full screen");
+  }
+  try {
+    localStorage.setItem(PANEL_FULLSCREEN_KEY, nextFullscreen ? "1" : "0");
+  } catch {}
+}
+
+function loadPanelFullscreenPreference() {
+  try {
+    return localStorage.getItem(PANEL_FULLSCREEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function activateTab(tabId) {
   setPanelOpen(true);
   const allPanels = Array.from(document.querySelectorAll(".tab-panel"));
@@ -1288,7 +1313,9 @@ Object.assign(observerApp, {
   setStatus,
   updateRunButtonState,
   setPanelOpen,
+  setPanelFullscreen,
   loadPanelOpenPreference,
+  loadPanelFullscreenPreference,
   activateTab,
   activateNovaSubtab,
   activateBrainSubtab,
