@@ -21,6 +21,10 @@
 - https://github.com/doctarock/Mail-Plugin-for-Home-Assistant
 - https://github.com/doctarock/Calendar-Plugin-For-Home-Assistant
 - https://github.com/doctarock/Project-Plugin-for-Home-Assistant
+
+## Support
+
+- Buy me a coffee https://buymeacoffee.com/pixelforgestudio
 ---
 
 Nova is a host-side AI orchestration application that combines:
