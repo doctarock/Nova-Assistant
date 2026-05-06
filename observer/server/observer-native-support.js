@@ -328,6 +328,11 @@ export function createObserverNativeSupport(context = {}) {
       .filter((entry) => Number(entry.receivedAt || 0) >= sinceMs)
       .sort((left, right) => Number(right.receivedAt || 0) - Number(left.receivedAt || 0));
     const visibleMessages = recentMessages.filter((message) => !message?.triage?.likelySpam && !message?.triage?.likelyPhishing);
+    const trashedMail = (Array.isArray(mailState?.quarantinedMessages) ? mailState.quarantinedMessages : [])
+      .filter((entry) => entry.agentId === agent?.id)
+      .filter((entry) => Number(entry.quarantinedAt || 0) >= sinceMs)
+      .filter((entry) => String(entry.destination || "").trim().toLowerCase() === "trash")
+      .sort((left, right) => Number(right.quarantinedAt || 0) - Number(left.quarantinedAt || 0));
     const pendingUnsureIds = new Set(
       (Array.isArray(mailWatchRulesState?.rules) ? mailWatchRulesState.rules : [])
         .filter((rule) => rule?.enabled !== false)
@@ -341,6 +346,7 @@ export function createObserverNativeSupport(context = {}) {
     if (recentDone.length) headlineParts.push(`completed ${recentDone.length} task${recentDone.length === 1 ? "" : "s"}`);
     if (recentTaskMentions.length) headlineParts.push(`worked on ${humanJoin(recentTaskMentions)}`);
     if (visibleMessages.length) headlineParts.push(`received ${visibleMessages.length} non-spam email${visibleMessages.length === 1 ? "" : "s"}`);
+    if (trashedMail.length) headlineParts.push(`trashed ${trashedMail.length} unsafe email${trashedMail.length === 1 ? "" : "s"}`);
     if (heldMessages.length) headlineParts.push(`held ${heldMessages.length} for your review`);
     if (recentCronMentions.length) headlineParts.push(`saw ${recentCronMentions.length} scheduled job run${recentCronMentions.length === 1 ? "" : "s"} complete`);
     if (currentInProgress.length) headlineParts.push(`${currentInProgress.length} still in progress`);
@@ -392,6 +398,13 @@ export function createObserverNativeSupport(context = {}) {
       }
     } else {
       lines.push("Inbox and mail activity: no non-spam email activity in the last day.");
+    }
+    if (trashedMail.length) {
+      lines.push("Unsafe mail handled:");
+      for (const message of trashedMail.slice(0, 5)) {
+        const subject = String(message.subject || "(no subject)").replace(/\s+/g, " ").trim() || "(no subject)";
+        lines.push(`- I trashed "${subject}".`);
+      }
     }
 
     if (uniqueArtifacts.length) {
@@ -458,7 +471,7 @@ export function createObserverNativeSupport(context = {}) {
       lines.push(`Messages flagged as likely spam or promotional noise: ${status.likelySpamCount}.`);
     }
     if (Number(status.quarantinedCount || 0) > 0) {
-      lines.push(`Messages automatically quarantined before review: ${status.quarantinedCount}.`);
+      lines.push(`Unsafe messages automatically handled before review: ${status.quarantinedCount}.`);
     }
     const categoryBits = Object.entries(status.categoryCounts || {})
       .filter(([, count]) => Number(count || 0) > 0)

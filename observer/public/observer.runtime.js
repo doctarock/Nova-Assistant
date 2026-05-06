@@ -5515,6 +5515,13 @@ es.onerror = () => {
 const observerEvents = new EventSource("/events/observer");
 observerEvents.onmessage = (ev) => {
   const data = JSON.parse(ev.data);
+  const eventSeq = Number(data.eventSeq || data.task?.latestEventSeq || 0);
+  if (eventSeq > 0) {
+    if (eventSeq <= latestObserverEventSeq) {
+      return;
+    }
+    latestObserverEventSeq = eventSeq;
+  }
   if (data.type === "observer.connected") {
     return;
   }

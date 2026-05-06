@@ -10,6 +10,7 @@ export function createObserverTaskStorageIo(options = {}) {
     pathModule = null,
     shouldHideInspectorEntry = () => false,
     taskEventLogPath = "",
+    taskEventSeqPath = "",
     taskPathForStatus = () => "",
     taskQueueClosed = "",
     taskQueueDone = "",
@@ -205,6 +206,23 @@ export function createObserverTaskStorageIo(options = {}) {
     }
   }
 
+  async function readCoreEventSeq() {
+    try {
+      const raw = await readVolumeFile(taskEventSeqPath);
+      const parsed = Number(String(raw || "").trim());
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async function allocateCoreEventSeq() {
+    const current = await readCoreEventSeq();
+    const next = current + 1;
+    await writeVolumeText(taskEventSeqPath, `${next}\n`);
+    return next;
+  }
+
   function resolveQueueWorkspacePath(workspacePath = "") {
     const normalized = String(workspacePath || "").trim().replaceAll("\\", "/").replace(/^\/+/, "");
     if (!normalized) {
@@ -248,9 +266,11 @@ export function createObserverTaskStorageIo(options = {}) {
   async function recordTaskBreadcrumb(event = {}) {
     const taskId = String(event.taskId || "").trim();
     const timestamp = Number(event.at || Date.now());
-    const normalizedEvent = {
+    let normalizedEvent = {
       at: timestamp,
+      eventSeq: 0,
       eventType: String(event.eventType || "task.updated").trim() || "task.updated",
+      type: String(event.type || event.eventType || "task.updated").trim() || "task.updated",
       taskId,
       fromStatus: String(event.fromStatus || "").trim(),
       toStatus: String(event.toStatus || "").trim(),
@@ -263,6 +283,10 @@ export function createObserverTaskStorageIo(options = {}) {
       brainId: String(event.brainId || "").trim()
     };
     await enqueueTaskTraceWrite(async () => {
+      normalizedEvent = {
+        ...normalizedEvent,
+        eventSeq: await allocateCoreEventSeq()
+      };
       const index = await readTaskStateIndex();
       if (!index.tasks || typeof index.tasks !== "object") {
         index.tasks = {};
@@ -281,6 +305,7 @@ export function createObserverTaskStorageIo(options = {}) {
           previousFilePath: normalizedEvent.fromPath || existing.previousFilePath || "",
           previousWorkspacePath: normalizedEvent.fromWorkspacePath || existing.previousWorkspacePath || "",
           lastEventType: normalizedEvent.eventType,
+          latestEventSeq: normalizedEvent.eventSeq,
           lastReason: normalizedEvent.reason || existing.lastReason || "",
           sessionId: normalizedEvent.sessionId || existing.sessionId || "",
           brainId: normalizedEvent.brainId || existing.brainId || "",
@@ -290,6 +315,32 @@ export function createObserverTaskStorageIo(options = {}) {
       await writeVolumeText(taskStateIndexPath, `${JSON.stringify(index, null, 2)}\n`);
       await appendVolumeText(taskEventLogPath, `${JSON.stringify(normalizedEvent)}\n`);
     });
+    return normalizedEvent;
+  }
+
+  async function recordCoreEvent(event = {}) {
+    let normalizedEvent = {
+      at: Number(event.at || Date.now()),
+      eventSeq: 0,
+      eventType: String(event.eventType || event.type || "core.event").trim() || "core.event",
+      type: String(event.type || event.eventType || "core.event").trim() || "core.event",
+      taskId: String(event.taskId || "").trim(),
+      transactionId: String(event.transactionId || "").trim(),
+      provider: String(event.provider || "").trim(),
+      toolName: String(event.toolName || "").trim(),
+      status: String(event.status || "").trim(),
+      summary: compactTaskText(String(event.summary || event.reason || "").trim(), 500),
+      pluginId: String(event.pluginId || "").trim(),
+      payload: event.payload && typeof event.payload === "object" ? event.payload : undefined
+    };
+    await enqueueTaskTraceWrite(async () => {
+      normalizedEvent = {
+        ...normalizedEvent,
+        eventSeq: await allocateCoreEventSeq()
+      };
+      await appendVolumeText(taskEventLogPath, `${JSON.stringify(normalizedEvent)}\n`);
+    });
+    return normalizedEvent;
   }
 
   async function readTaskRecordAtPath(filePath, options = {}) {
@@ -399,10 +450,12 @@ export function createObserverTaskStorageIo(options = {}) {
     listVolumeFiles,
     migrateLegacyTaskQueueIfNeeded,
     readTaskHistory,
+    readCoreEventSeq,
     readTaskRecordAtPath,
     readTaskStateIndex,
     readVolumeFile,
     recordTaskBreadcrumb,
+    recordCoreEvent,
     resolveQueueWorkspacePath,
     writeVolumeText
   };

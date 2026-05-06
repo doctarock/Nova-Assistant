@@ -12,6 +12,7 @@ export function createObserverWorkerPrompting(context = {}) {
     fs,
     getAgentPersonaName,
     getObserverConfig,
+    appendHookTrace = async () => null,
     getPluginToolsByScope = () => [],
     getProjectNoChangeMinimumTargets,
     selectToolsForTask = null,
@@ -388,7 +389,8 @@ export function createObserverWorkerPrompting(context = {}) {
     preparedAttachmentsFiles = [],
     visionImageCount = 0,
     runtimeNotesExtra = [],
-    internalJobType = ""
+    internalJobType = "",
+    taskId = ""
   } = {}) {
     const observerConfig = getObserverConfig();
     const allowedMounts = observerConfig.mounts.filter((mount) => selectedMountIds.includes(mount.id));
@@ -455,6 +457,14 @@ export function createObserverWorkerPrompting(context = {}) {
       preset
     }).catch(() => ({ lines: [] }));
     const injectedLines = Array.isArray(hookResult?.lines) ? hookResult.lines.filter(Boolean) : [];
+    if (injectedLines.length > 0 && taskId) {
+      appendHookTrace(taskId, {
+        hook: "worker:prompt:build",
+        pluginId: "",
+        effect: `${injectedLines.length} line(s) injected into worker system prompt`,
+        payloadPreview: JSON.stringify({ linesAdded: injectedLines.length, preview: injectedLines.slice(0, 2).join(" | ").slice(0, 200) })
+      }).catch(() => {});
+    }
 
     return [...coreLines, ...injectedLines].join("\n");
   }

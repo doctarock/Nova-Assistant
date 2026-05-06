@@ -738,7 +738,7 @@ export function createObserverNativeResponseHelpers(context = {}) {
 
     if (typeof isProjectStatusRequest === "function" && isProjectStatusRequest(text)) {
       if (typeof buildProjectStatusSummary === "function") {
-        const lines = await buildProjectStatusSummary();
+        const lines = await buildProjectStatusSummary({ message: text });
         return {
           type: "project_status",
           title: "Project status",

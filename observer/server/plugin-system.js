@@ -1421,6 +1421,7 @@ export function createNovaPluginManager(context = {}) {
       }
       const startedAt = Date.now();
       try {
+        const beforePayload = currentPayload;
         const nextPayload = await withTimeout(
           Promise.resolve().then(() => handler.handler(currentPayload)),
           timeoutMs,
@@ -1428,6 +1429,22 @@ export function createNovaPluginManager(context = {}) {
         );
         if (nextPayload !== undefined) {
           currentPayload = nextPayload;
+        }
+        const materialHook = /^(worker:prompt:build|permissions:decision|worker:tool-call:completed|queue:task-dispatch-started|queue:task-processed|transaction:|provider-history:)/.test(normalizedName);
+        const taskId = String(currentPayload?.taskId || beforePayload?.taskId || currentPayload?.task?.id || beforePayload?.task?.id || "").trim();
+        if (
+          materialHook
+          && taskId
+          && sharedRuntimeContext?.taskFlightRecorder
+          && typeof sharedRuntimeContext.taskFlightRecorder.appendHookTrace === "function"
+        ) {
+          const changed = nextPayload !== undefined && nextPayload !== beforePayload;
+          void sharedRuntimeContext.taskFlightRecorder.appendHookTrace(taskId, {
+            hook: normalizedName,
+            pluginId: handler.pluginId,
+            effect: changed ? "hook returned replacement payload" : "hook observed payload",
+            payloadPreview: JSON.stringify(currentPayload || {}).slice(0, 4000)
+          }).catch(() => {});
         }
         updateRuntimeStats({
           pluginId: handler.pluginId,

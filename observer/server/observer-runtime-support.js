@@ -17,25 +17,59 @@ export function createObserverRuntimeSupport(options = {}) {
 
   function defaultAppRoomTextures() {
     return {
-      roomDay: "/assets/textures/room-day.png",
-      roomNight: "/assets/textures/room-night.png",
-      desk: "/assets/textures/desk.png",
-      shelf: "/assets/textures/shelf.png"
+      walls: "",
+      floor: "",
+      ceiling: "",
+      windowFrame: ""
     };
   }
 
   function defaultAppPropSlots() {
     return {
-      leftShelf: { modelPath: "/assets/props/book-stack.glb", scale: 1 },
-      rightShelf: { modelPath: "/assets/props/plant.glb", scale: 1 },
-      deskLeft: { modelPath: "/assets/props/mug.glb", scale: 1 },
-      deskRight: { modelPath: "/assets/props/notebook.glb", scale: 1 }
+      backWallLeft: { model: "", scale: 1 },
+      backWallRight: { model: "", scale: 1 },
+      wallLeft: { model: "", scale: 1 },
+      wallRight: { model: "", scale: 1 },
+      besideLeft: { model: "", scale: 1 },
+      besideRight: { model: "", scale: 1 },
+      outsideLeft: { model: "", scale: 1 },
+      outsideRight: { model: "", scale: 1 }
     };
   }
 
   function defaultAppReactionPathsByModel() {
+    const defaultPaths = {
+      idle: "Charged_Ground_Slam",
+      calm: "Cheer_with_Both_Hands_Up",
+      agree: "Talk_with_Left_Hand_Raised",
+      angry: "Head_Hold_in_Pain",
+      love: "Agree_Gesture",
+      celebrate: "Angry_Stomp",
+      confused: "Walking",
+      dance: "Idle_3",
+      sass: "Big_Heart_Gesture",
+      hurt: "Scheming_Hand_Rub",
+      reflect: "Idle_6",
+      run: "Shrug",
+      scheme: "Wave_One_Hand",
+      shrug: "Confused_Scratch",
+      rant: "Stand_Talking_Angry",
+      passionate: "Mirror_Viewing",
+      explain: "FunnyDancing_01",
+      walk: "Hand_on_Hip_Gesture",
+      wave: "Talk_Passionately",
+      slam: "Running"
+    };
     return {
-      "/assets/characters/nova.glb": { idle: "/assets/characters/reactions/nova-idle.glb" }
+      "/assets/characters/Nova.glb": {
+        idleClip: defaultPaths.idle,
+        talkingClips: [
+          "Mirror_Viewing",
+          "Talk_with_Left_Hand_Raised",
+          "FunnyDancing_01"
+        ],
+        paths: defaultPaths
+      }
     };
   }
 
@@ -45,11 +79,24 @@ export function createObserverRuntimeSupport(options = {}) {
   }
 
   function normalizeReactionPathProfile(value = {}) {
+    const rawPaths = value?.paths && typeof value.paths === "object"
+      ? value.paths
+      : value;
+    const paths = Object.fromEntries(
+      Object.entries(rawPaths && typeof rawPaths === "object" ? rawPaths : {})
+        .map(([emotion, clip]) => [String(emotion || "").trim().toLowerCase(), String(clip || "").trim()])
+        .filter(([emotion, clip]) => emotion && clip)
+    );
+    const idleClip = String(value?.idleClip || paths.idle || value?.idle || "").trim();
+    if (idleClip) {
+      paths.idle = idleClip;
+    }
     return {
-      idle: String(value?.idle || "").trim(),
-      positive: String(value?.positive || "").trim(),
-      negative: String(value?.negative || "").trim(),
-      thinking: String(value?.thinking || "").trim()
+      idleClip,
+      talkingClips: Array.isArray(value?.talkingClips)
+        ? value.talkingClips.map((clip) => String(clip || "").trim()).filter(Boolean)
+        : [],
+      paths
     };
   }
 
@@ -66,12 +113,35 @@ export function createObserverRuntimeSupport(options = {}) {
 
   function normalizeStylizationFilterPreset(value, fallback = "none") {
     const normalized = String(value || "").trim().toLowerCase();
-    return ["none", "soft", "anime", "cinematic"].includes(normalized) ? normalized : fallback;
+    return [
+      "none",
+      "soft",
+      "cinematic",
+      "noir",
+      "vivid",
+      "dream",
+      "retro_vhs",
+      "haunted",
+      "surveillance",
+      "crystal",
+      "whimsical",
+      "toon",
+      "anime"
+    ].includes(normalized) ? normalized : fallback;
   }
 
   function normalizeStylizationEffectPreset(value, fallback = "none") {
     const normalized = String(value || "").trim().toLowerCase();
-    return ["none", "glow", "grain", "comic"].includes(normalized) ? normalized : fallback;
+    return [
+      "none",
+      "toon",
+      "dream",
+      "retro_vhs",
+      "whimsical",
+      "glow",
+      "grain",
+      "comic"
+    ].includes(normalized) ? normalized : fallback;
   }
 
   async function walkAssetDirectory(dirPath, relativePrefix = "") {
@@ -159,7 +229,8 @@ export function createObserverRuntimeSupport(options = {}) {
   function broadcastObserverEvent(event) {
     const payload = {
       ts: Date.now(),
-      ...event
+      ...event,
+      eventSeq: Number(event?.eventSeq || event?.task?.latestEventSeq || 0)
     };
     const msg = `data: ${JSON.stringify(payload)}\n\n`;
     for (const res of observerEventClients) {

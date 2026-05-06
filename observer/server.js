@@ -26,6 +26,7 @@ import {
 import { createObserverSandboxService } from "./server/observer-sandbox-service.js";
 import { createSandboxIoService } from "./server/sandbox-io-service.js";
 import { createSandboxWorkspaceService } from "./server/sandbox-workspace-service.js";
+import { createWorkspaceTransactionComposition } from "./server/workspace-transaction-composition.js";
 import { createMemoryTrustDomain } from "./server/memory-trust-domain.js";
 import { composeObserverServer } from "./server/observer-server-composition.js";
 import {
@@ -455,6 +456,9 @@ const TASK_RESHAPE_ISSUES_PATH = path.join(RUNTIME_ROOT, "task-reshape-issues.js
 const TASK_RESHAPE_LOG_PATH = path.join(RUNTIME_ROOT, "task-reshape-log.md");
 const TASK_STATE_INDEX_PATH = path.join(RUNTIME_ROOT, "task-state-index.json");
 const TASK_EVENT_LOG_PATH = path.join(RUNTIME_ROOT, "task-events.jsonl");
+const TASK_EVENT_SEQ_PATH = path.join(RUNTIME_ROOT, "task-event-seq.txt");
+const WORKSPACE_TRANSACTION_ROOT = path.join(RUNTIME_ROOT, "workspace-transactions");
+const TASK_FLIGHT_RECORDER_ROOT = path.join(RUNTIME_ROOT, "task-flight-recorder");
 const REGRESSION_RUN_REPORT_PATH = path.join(RUNTIME_ROOT, "regression-last-run.json");
 const SKILL_REGISTRY_PATH = path.join(RUNTIME_ROOT, "skill-registry.json");
 const TOOL_REGISTRY_PATH = path.join(RUNTIME_ROOT, "tool-registry.json");
@@ -847,6 +851,24 @@ const {
   observerContainerWorkspaceRoot: OBSERVER_CONTAINER_WORKSPACE_ROOT,
   observerContainerProjectsRoot: OBSERVER_CONTAINER_PROJECTS_ROOT,
   quoteShellPath
+});
+const {
+  coreTransactionsCapability,
+  taskFlightRecorder,
+  workspaceTransactions
+} = createWorkspaceTransactionComposition({
+  compactTaskText,
+  editContainerTextFile,
+  emitCoreEvent: (...args) => emitCoreEvent(...args),
+  fs,
+  moveContainerPath,
+  pathModule: path,
+  readContainerFileBuffer,
+  readTaskHistory: (...args) => readTaskHistory(...args),
+  resolveToolPath,
+  taskFlightRecorderRoot: TASK_FLIGHT_RECORDER_ROOT,
+  transactionRoot: WORKSPACE_TRANSACTION_ROOT,
+  writeContainerTextFile
 });
 
 async function runOllamaPrompt(model, prompt, {
@@ -2401,6 +2423,7 @@ const {
   readTaskStateIndex,
   readVolumeFile,
   recordTaskBreadcrumb,
+  recordCoreEvent,
   resolveQueueWorkspacePath,
   writeVolumeText
 } = createObserverTaskStorageIo({
@@ -2421,9 +2444,19 @@ const {
   taskQueueInProgress: TASK_QUEUE_IN_PROGRESS,
   taskQueueRoot: TASK_QUEUE_ROOT,
   taskQueueWorkspacePath: TASK_QUEUE_WORKSPACE_PATH,
+  taskEventSeqPath: TASK_EVENT_SEQ_PATH,
   taskStateIndexPath: TASK_STATE_INDEX_PATH,
   workspaceTaskPath: (...args) => workspaceTaskPath(...args)
 });
+
+async function emitCoreEvent(event = {}) {
+  const recorded = await recordCoreEvent(event);
+  broadcastObserverEvent({
+    ...event,
+    eventSeq: Number(recorded?.eventSeq || 0)
+  });
+  return recorded;
+}
 
 async function clearDirectoryContents(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
@@ -3398,6 +3431,8 @@ const {
   TASK_QUEUE_IN_PROGRESS,
   PDFDocument,
   StandardFonts,
+  appendHookTrace: (...args) => taskFlightRecorder.appendHookTrace(...args),
+  appendReadBasis: (...args) => taskFlightRecorder.appendReadBasis(...args),
   appendVolumeText,
   compactTaskText,
   editContainerTextFile,
@@ -3424,6 +3459,7 @@ const {
   runObserverToolContainerNode,
   runSandboxShell,
   searchSkillLibrary,
+  workspaceTransactions,
   iotDomain,
   toolMoveMail,
   toolReadDocument,
@@ -4691,12 +4727,94 @@ const {
   buildInboxSummary,
   buildMailStatusSummary,
   buildOutputStatusSummary,
-  buildProjectStatusSummary: async () => {
+  buildProjectStatusSummary: async ({ message = "" } = {}) => {
     const runtime = getProjectsRuntime();
     if (!runtime || typeof runtime.listProjectPipelines !== "function") {
       return ["Projects plugin is unavailable."];
     }
+    const compactProjectLine = (value = "", maxLength = 180) => {
+      const normalized = String(value || "").trim().replace(/\s+/g, " ");
+      if (!normalized) {
+        return "";
+      }
+      return normalized.length > maxLength ? `${normalized.slice(0, Math.max(1, maxLength - 3)).trimEnd()}...` : normalized;
+    };
+    const normalizeProjectSearchText = (value = "") => String(value || "")
+      .toLowerCase()
+      .replace(/%20/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const projectMatchesMessage = (panel = {}, rawMessage = "") => {
+      const needle = normalizeProjectSearchText(rawMessage);
+      if (!needle) {
+        return false;
+      }
+      const aliases = [
+        panel.name,
+        panel.sourceName,
+        panel.key,
+        ...(Array.isArray(panel.aliases) ? panel.aliases : [])
+      ].map(normalizeProjectSearchText).filter(Boolean);
+      return aliases.some((alias) => alias && (needle.includes(alias) || alias.includes(needle)));
+    };
+    const formatProjectPanelStatus = (panel = {}) => {
+      const name = String(panel.name || panel.sourceName || "Unknown project").trim();
+      const assessment = panel.assessment && typeof panel.assessment === "object" ? panel.assessment : {};
+      const checklist = panel.checklist && typeof panel.checklist === "object" ? panel.checklist : {};
+      const todo = checklist.todo && typeof checklist.todo === "object" ? checklist.todo : {};
+      const roles = checklist.roles && typeof checklist.roles === "object" ? checklist.roles : {};
+      const activeRoles = Array.isArray(panel.activeRoles) ? panel.activeRoles : [];
+      const roleReports = Array.isArray(panel.roleReports) ? panel.roleReports : [];
+      const lines = [`${name}: ${String(assessment.phaseLabel || "Unknown phase").trim()} phase${assessment.workstreamLabel ? ` on a ${assessment.workstreamLabel} track` : ""}.`];
+      if (assessment.currentPriority) {
+        lines.push(`Priority: ${compactProjectLine(assessment.currentPriority, 220)}`);
+      }
+      const openTodos = Array.isArray(todo.unchecked) ? todo.unchecked : [];
+      const doneTodos = Array.isArray(todo.checked) ? todo.checked : [];
+      lines.push(`TODOs: ${Number(todo.uncheckedCount || openTodos.length || 0)} open, ${Number(todo.checkedCount || doneTodos.length || 0)} done.`);
+      for (const item of openTodos.slice(0, 6)) {
+        lines.push(`- [ ] ${compactProjectLine(item, 180)}`);
+      }
+      const visibleActiveRoles = activeRoles.slice(0, 6).map((entry) => {
+        const roleName = String(entry?.name || entry || "").trim();
+        const reason = String(entry?.reason || "").trim();
+        return roleName ? `${roleName}${reason ? `: ${compactProjectLine(reason, 120)}` : ""}` : "";
+      }).filter(Boolean);
+      if (visibleActiveRoles.length) {
+        lines.push(`Active roles: ${visibleActiveRoles.join("; ")}.`);
+      } else {
+        const selectedRoles = roleReports
+          .filter((entry) => entry?.selected || Number(entry?.uncheckedCount || 0) || Number(entry?.checkedCount || 0))
+          .map((entry) => String(entry?.name || "").trim())
+          .filter(Boolean)
+          .slice(0, 6);
+        lines.push(`Roles: ${selectedRoles.length ? selectedRoles.join(", ") : "No active roles recorded yet"}.`);
+      }
+      const roleTaskLines = roleReports
+        .flatMap((entry) => (Array.isArray(entry?.unchecked) ? entry.unchecked : []).map((task) => ({
+          role: String(entry?.name || "").trim(),
+          task: compactProjectLine(task, 170)
+        })))
+        .filter((entry) => entry.role && entry.task)
+        .slice(0, 6);
+      if (roleTaskLines.length) {
+        lines.push(`Role tasks: ${Number(roles.uncheckedCount || roleTaskLines.length || 0)} open, ${Number(roles.checkedCount || 0)} done.`);
+        for (const entry of roleTaskLines) {
+          lines.push(`- ${entry.role}: ${entry.task}`);
+        }
+      }
+      return lines;
+    };
     const lines = [];
+    if (typeof runtime.buildProjectSystemStatePayload === "function") {
+      const state = await runtime.buildProjectSystemStatePayload().catch(() => null);
+      const panels = Array.isArray(state?.projectPanels) ? state.projectPanels : [];
+      const matchingPanel = panels.find((panel) => projectMatchesMessage(panel, message));
+      if (matchingPanel) {
+        return formatProjectPanelStatus(matchingPanel);
+      }
+    }
     const pipelines = await runtime.listProjectPipelines({ limit: 20 }).catch(() => []);
     if (!Array.isArray(pipelines) || !pipelines.length) {
       lines.push("No active workspace projects found.");
@@ -4833,6 +4951,7 @@ const {
   OBSERVER_CONTAINER_OUTPUT_ROOT,
   OBSERVER_CONTAINER_WORKSPACE_ROOT,
   WORKER_TOOLS,
+  appendHookTrace: (...args) => taskFlightRecorder.appendHookTrace(...args),
   buildInstalledSkillsGuidanceNote,
   buildPromptMemoryGuidanceNote,
   fs,
@@ -4920,6 +5039,11 @@ const { executeObserverRun: executeObserverRun } = createObserverExecutionRunner
   runOllamaPrompt,
   sanitizeSkillSlug,
   appendRepairLesson,
+  appendHookTrace: (...args) => taskFlightRecorder.appendHookTrace(...args),
+  appendProviderHistory: (...args) => taskFlightRecorder.appendProviderHistory(...args),
+  appendToolStep: (...args) => taskFlightRecorder.appendToolStep(...args),
+  patchProviderSummary: (...args) => taskFlightRecorder.patchProviderSummary(...args),
+  writeProviderSummary: (...args) => taskFlightRecorder.writeProviderSummary(...args),
   OBSERVER_CONTAINER_WORKSPACE_ROOT,
   loopLessonsHostPath: path.join(PROMPT_FILES_ROOT, "LOOP-LESSONS.md"),
   runPluginHook: async (hookName, payload) => {
@@ -4961,6 +5085,7 @@ const {
   buildCapabilityMismatchRetryMessage,
   buildCompletionReviewSummary,
   buildQueuedTaskExecutionPrompt,
+  buildTaskResumeSummary: (...args) => taskFlightRecorder.buildTaskResumeSummary(...args),
   buildRetryTaskMeta,
   buildTodoTextFromWaitingQuestion,
   canReshapeTask,
@@ -5283,6 +5408,12 @@ const pluginRuntimeContext = {
   syncWorkspaceProjectToRepositorySource,
   taskLifecycleService,
   taskQueueRoot: TASK_QUEUE_ROOT,
+  coreTransactions: coreTransactionsCapability,
+  taskFlightRecorder: {
+    appendHookTrace: (...args) => taskFlightRecorder.appendHookTrace(...args),
+    buildDebugPacket: (...args) => taskFlightRecorder.buildDebugPacket(...args),
+    validateProviderHistory: (...args) => taskFlightRecorder.validateProviderHistory(...args)
+  },
   wordpressSiteRegistryPath: WORDPRESS_SITE_REGISTRY_PATH,
   iotDomain,
   writeContainerTextFile,
@@ -5546,7 +5677,11 @@ await composeObserverServer({
     appendDailyQuestionLog,
     answerWaitingTask,
     broadcastObserverEvent,
+    buildTaskDebugPacket: (...args) => taskFlightRecorder.buildDebugPacket(...args),
+    validateProviderHistory: (...args) => taskFlightRecorder.validateProviderHistory(...args),
     createQueuedTask,
+    applyApprovedTransaction: (...args) => workspaceTransactions.applyApprovedTransaction(...args),
+    approveTransaction: (...args) => workspaceTransactions.approveTransaction(...args),
     persistTaskTransition,
     ensureRecreationJob,
     findRecentDuplicateQueuedTask,
@@ -5560,6 +5695,9 @@ await composeObserverServer({
     listTaskEvents,
     listTaskReshapeIssues,
     listTasksByFolder,
+    listTransactionsForTask: (...args) => workspaceTransactions.listTransactionsForTask(...args),
+    rollbackTransaction: (...args) => workspaceTransactions.rollbackTransaction(...args),
+    rejectTransaction: (...args) => workspaceTransactions.rejectTransaction(...args),
     TASK_QUEUE_CLOSED,
     normalizeSourceIdentityRecord,
     normalizeUserRequest,

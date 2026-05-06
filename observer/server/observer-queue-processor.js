@@ -15,6 +15,7 @@ export function createObserverQueueProcessor(context = {}) {
     buildCapabilityMismatchRetryMessage,
     buildCompletionReviewSummary,
     buildQueuedTaskExecutionPrompt,
+    buildTaskResumeSummary = async () => null,
     buildRetryTaskMeta,
     buildTodoTextFromWaitingQuestion,
     canReshapeTask,
@@ -257,6 +258,10 @@ export function createObserverQueueProcessor(context = {}) {
           taskRuntimeNotes.push(`- ${index + 1}. Question: ${question}`);
           taskRuntimeNotes.push(`  Answer: ${answer}`);
         }
+      }
+      const resumeSummary = await buildTaskResumeSummary(String(inProgressTask.id || "").trim()).catch(() => null);
+      if (resumeSummary) {
+        taskRuntimeNotes.push(resumeSummary);
       }
       let taskPrompt = String(inProgressTask.message || "").trim();
       if (inProgressTask.scheduler?.periodic) {

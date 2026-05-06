@@ -212,7 +212,9 @@ export function isFinanceSummaryRequest(message = "") {
 
 export function isProjectStatusRequest(message = "") {
   const lower = String(message || "").toLowerCase().trim();
-  return /\b(project status|project overview|active projects|workspace projects|what projects|show projects|list projects|project summary|project pipelines?|project progress|what.?s (?:in|on) the workspace|project board|how many projects|current projects|ongoing projects|what.?s being worked on in (?:the )?workspace|tell me about (?:the )?projects?)\b/.test(lower);
+  return /\b(project status|project overview|active projects|workspace projects|what projects|show projects|list projects|project summary|project pipelines?|project progress|current progress|progress on .*project|progress for .*project|what.?s the progress|what.?s current progress|what.?s (?:in|on) the workspace|project board|how many projects|current projects|ongoing projects|what.?s being worked on in (?:the )?workspace|tell me about (?:the )?projects?)\b/.test(lower)
+    || /\b(?:status|progress|phase|todos?|to dos?|roles?)\b.*\bproject\b/.test(lower)
+    || /\bproject\b.*\b(?:status|progress|phase|todos?|to dos?|roles?)\b/.test(lower);
 }
 
 export function isScheduledJobsRequest(message = "") {

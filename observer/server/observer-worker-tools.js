@@ -30,8 +30,11 @@ export function createObserverWorkerTools(options = {}) {
     resolveToolPath = (value = "") => String(value || ""),
     rgb = () => ({}),
     runObserverToolContainerNode = async () => {},
+    appendHookTrace = async () => null,
+    appendReadBasis = async () => null,
     runSandboxShell = async () => ({ ok: false, stdout: "", stderr: "" }),
     searchSkillLibrary = async () => [],
+    workspaceTransactions = null,
     toolMoveMail = async () => ({}),
     toolReadDocument = async () => ({}),
     toolSendMail = async () => ({}),
@@ -122,6 +125,9 @@ async function toolWriteFile(args = {}) {
   const content = requireNonEmptyToolContent(args.content, { toolName: "write_file", targetPath: target });
   requireValidPlanningDocContent(content, { toolName: "write_file", targetPath: target });
   const append = Boolean(args.append);
+  if (workspaceTransactions && typeof workspaceTransactions.transactWriteFile === "function") {
+    return workspaceTransactions.transactWriteFile({ ...args, path: target, content, append }, args.__context || {});
+  }
   return writeContainerTextFile(target, content, { append, timeoutMs: 30000 });
 }
 
@@ -187,10 +193,22 @@ async function toolEditFile(args = {}) {
   ) {
     const content = requireNonEmptyToolContent(normalizedArgs.content, { toolName: "edit_file", targetPath: target });
     requireValidPlanningDocContent(content, { toolName: "edit_file", targetPath: target });
+    if (workspaceTransactions && typeof workspaceTransactions.transactEditFile === "function") {
+      return workspaceTransactions.transactEditFile(
+        { ...normalizedArgs, path: target, content, hasContent: true },
+        args.__context || {}
+      );
+    }
     return writeContainerTextFile(
       target,
       content,
       { timeoutMs: 30000 }
+    );
+  }
+  if (workspaceTransactions && typeof workspaceTransactions.transactEditFile === "function") {
+    return workspaceTransactions.transactEditFile(
+      { ...normalizedArgs, path: target },
+      args.__context || {}
     );
   }
   return editContainerTextFile(target, {
@@ -202,6 +220,9 @@ async function toolEditFile(args = {}) {
 async function toolMovePath(args = {}) {
   const from = resolveToolPath(args.fromPath || args.from);
   const to = resolveToolPath(args.toPath || args.to);
+  if (workspaceTransactions && typeof workspaceTransactions.transactMovePath === "function") {
+    return workspaceTransactions.transactMovePath({ ...args, from, to }, args.__context || {});
+  }
   return moveContainerPath(from, to, {
     overwrite: args.overwrite === true,
     timeoutMs: 30000
@@ -575,12 +596,54 @@ async function executeWorkerToolCall(toolCall, context) {
     }
   }
   await ensureAutonomousToolApproved(name);
+  const contextualArgs = args && typeof args === "object"
+    ? { ...args, __context: context && typeof context === "object" ? context : {} }
+    : args;
+  const pluginContextualArgs = args && typeof args === "object"
+    ? {
+        ...args,
+        taskContext: context?.taskContext && typeof context.taskContext === "object" ? context.taskContext : {},
+        toolCallId: String(normalized?.id || "").trim()
+      }
+    : args;
   if (name === "list_files") return toolListFiles(args);
-  if (name === "read_document") return toolReadDocument(args, context);
-  if (name === "read_file") return toolReadFile(args);
-  if (name === "write_file") return toolWriteFile(args);
-  if (name === "edit_file") return toolEditFile(args);
-  if (name === "move_path") return toolMovePath(args);
+  if (name === "read_document") {
+    const result = await toolReadDocument(args, context);
+    const taskId = String(context?.taskContext?.taskId || "").trim();
+    if (taskId) {
+      const filePath = resolveToolPath(String(args.target || args.filePath || args.filepath || args.file || args.filename || args.path || "").trim());
+      if (filePath && !/^https?:\/\//i.test(filePath)) {
+        appendReadBasis(taskId, {
+          toolCallId: String(normalized?.id || "").trim(),
+          path: filePath,
+          scope: "container_workspace",
+          size: Number(result?.size || result?.extra?.size || 0),
+          source: "read_document"
+        }).catch(() => {});
+      }
+    }
+    return result;
+  }
+  if (name === "read_file") {
+    const result = await toolReadFile(args);
+    const taskId = String(context?.taskContext?.taskId || "").trim();
+    if (taskId) {
+      const filePath = resolveToolPath(String(args.file || args.path || args.target || args.filepath || args.filename || "").trim());
+      if (filePath) {
+        appendReadBasis(taskId, {
+          toolCallId: String(normalized?.id || "").trim(),
+          path: filePath,
+          scope: "container_workspace",
+          size: Number(result?.size || result?.extra?.size || 0),
+          source: "read_file"
+        }).catch(() => {});
+      }
+    }
+    return result;
+  }
+  if (name === "write_file") return toolWriteFile(contextualArgs);
+  if (name === "edit_file") return toolEditFile(contextualArgs);
+  if (name === "move_path") return toolMovePath(contextualArgs);
   if (name === "update_daily_personal_notes") return toolUpdateDailyPersonalNotes(args);
   if (name === "shell_command") return toolShellCommand(args);
   if (name === "web_fetch") return toolWebFetch(args, context);
@@ -590,8 +653,88 @@ async function executeWorkerToolCall(toolCall, context) {
   if (name === "request_skill_installation") return recordSkillInstallationRequest({ ...args, requestedBy: "worker", source: "worker-tool" });
   if (name === "request_tool_addition") return recordToolAdditionRequest({ ...args, requestedBy: "worker", source: "worker-tool" });
   if (name === "list_installed_skills") return { skills: await listInstalledSkills() };
-  if (name === "send_mail") return toolSendMail(args);
-  if (name === "move_mail") return toolMoveMail(args);
+  if (name === "send_mail") {
+    const taskId = String(context?.taskContext?.taskId || "").trim();
+    const toolCallId = String(normalized?.id || "").trim();
+    let txnId = "";
+    if (workspaceTransactions && taskId) {
+      const txn = await workspaceTransactions.proposeExternalSideEffectTransaction({
+        pluginId: "mail",
+        domain: "mail",
+        operation: "send_email",
+        target: String(args.toEmail || "").trim(),
+        summary: `Send email to ${String(args.toEmail || "").trim()}: ${compactTaskText(String(args.subject || ""), 120)}`,
+        irreversible: true,
+        compensationPlan: "Send a follow-up correction or retraction email to the recipient if needed.",
+        requiresApproval: false,
+        riskReasons: ["irreversible_send"],
+        payload: { toEmail: String(args.toEmail || "").trim(), subject: compactTaskText(String(args.subject || ""), 200) }
+      }, { taskId, toolCallId }).catch(() => null);
+      txnId = String(txn?.id || "").trim();
+    }
+    try {
+      const result = await toolSendMail(args);
+      if (txnId && workspaceTransactions) {
+        workspaceTransactions.completeExternalTransaction(txnId, {
+          ok: true,
+          actor: "worker",
+          notes: `Email sent to ${String(args.toEmail || "").trim()}`
+        }).catch(() => {});
+      }
+      return result;
+    } catch (error) {
+      if (txnId && workspaceTransactions) {
+        workspaceTransactions.completeExternalTransaction(txnId, {
+          ok: false,
+          error: String(error?.message || ""),
+          failureClass: "send_failed"
+        }).catch(() => {});
+      }
+      throw error;
+    }
+  }
+  if (name === "move_mail") {
+    const taskId = String(context?.taskContext?.taskId || "").trim();
+    const toolCallId = String(normalized?.id || "").trim();
+    const destination = String(args.destination || args.action || "").trim().toLowerCase();
+    const messageId = String(args.messageId || args.id || "").trim();
+    let txnId = "";
+    if (workspaceTransactions && taskId) {
+      const txn = await workspaceTransactions.proposeExternalSideEffectTransaction({
+        pluginId: "mail",
+        domain: "mail",
+        operation: "move_mail",
+        target: messageId || "(matched)",
+        summary: `Move mail to ${destination}${messageId ? ` (id: ${messageId})` : ""}`,
+        irreversible: false,
+        compensationPlan: "Move the message back from the destination folder to the inbox using a mail client.",
+        requiresApproval: false,
+        riskReasons: [],
+        payload: { destination, messageId }
+      }, { taskId, toolCallId }).catch(() => null);
+      txnId = String(txn?.id || "").trim();
+    }
+    try {
+      const result = await toolMoveMail(args);
+      if (txnId && workspaceTransactions) {
+        workspaceTransactions.completeExternalTransaction(txnId, {
+          ok: true,
+          actor: "worker",
+          notes: `Mail moved to ${destination}`
+        }).catch(() => {});
+      }
+      return result;
+    } catch (error) {
+      if (txnId && workspaceTransactions) {
+        workspaceTransactions.completeExternalTransaction(txnId, {
+          ok: false,
+          error: String(error?.message || ""),
+          failureClass: "move_failed"
+        }).catch(() => {});
+      }
+      throw error;
+    }
+  }
   if (name === "list_wordpress_sites") return toolListWordPressSites();
   if (name === "save_wordpress_site") return toolSaveWordPressSite(args);
   if (name === "remove_wordpress_site") return toolRemoveWordPressSite(args);
@@ -604,7 +747,51 @@ async function executeWorkerToolCall(toolCall, context) {
   if (name === "wordpress_manage_plugin") return toolWordPressManagePlugin(args);
   if (name === "wordpress_recover_site") return toolWordPressRecoverSite(args);
   if (name === "wordpress_run_monitor") return toolWordPressRunMonitor(args);
-  if (name === "wordpress_upsert_post") return toolWordPressUpsertPost(args);
+  if (name === "wordpress_upsert_post") {
+    const taskId = String(context?.taskContext?.taskId || "").trim();
+    const toolCallId = String(normalized?.id || "").trim();
+    const siteId = String(args.siteId || "").trim();
+    const postTitle = compactTaskText(String(args.title || "").trim(), 120);
+    const postStatus = String(args.status || "draft").trim();
+    let txnId = "";
+    if (workspaceTransactions && taskId) {
+      const txn = await workspaceTransactions.proposeExternalSideEffectTransaction({
+        pluginId: "wordpress",
+        domain: "wordpress",
+        operation: "upsert_post",
+        target: siteId ? `wordpress:${siteId}` : "wordpress",
+        summary: `WordPress upsert_post on ${siteId}: "${postTitle}" (${postStatus})`,
+        irreversible: postStatus === "publish",
+        compensationPlan: postStatus === "publish"
+          ? "Set post status back to draft or delete the post via the WordPress admin if needed."
+          : "Delete or revert the post draft via the WordPress admin.",
+        requiresApproval: false,
+        riskReasons: postStatus === "publish" ? ["public_publish"] : [],
+        payload: { siteId, title: postTitle, status: postStatus }
+      }, { taskId, toolCallId }).catch(() => null);
+      txnId = String(txn?.id || "").trim();
+    }
+    try {
+      const result = await toolWordPressUpsertPost(args);
+      if (txnId && workspaceTransactions) {
+        workspaceTransactions.completeExternalTransaction(txnId, {
+          ok: true,
+          actor: "worker",
+          notes: `Post upserted on ${siteId}`
+        }).catch(() => {});
+      }
+      return result;
+    } catch (error) {
+      if (txnId && workspaceTransactions) {
+        workspaceTransactions.completeExternalTransaction(txnId, {
+          ok: false,
+          error: String(error?.message || ""),
+          failureClass: "upsert_failed"
+        }).catch(() => {});
+      }
+      throw error;
+    }
+  }
   if (name === "export_pdf") return toolExportPdf(args);
   if (name === "read_pdf") return toolReadPdf(args);
   if (name === "zip") return toolZip(args);
@@ -626,12 +813,21 @@ async function executeWorkerToolCall(toolCall, context) {
     const pluginResult = await pm.runHook("intake:tool-call", {
       handled: false,
       name,
-      args,
+      args: pluginContextualArgs,
       toolCall: normalized,
       normalized,
       result: null
     });
     if (pluginResult?.handled === true) {
+      const taskId = String(context?.taskContext?.taskId || "").trim();
+      if (taskId) {
+        appendHookTrace(taskId, {
+          hook: "intake:tool-call",
+          pluginId: String(pluginResult.pluginId || "").trim(),
+          effect: `Tool "${name}" handled by plugin`,
+          payloadPreview: compactTaskText(JSON.stringify({ name, argKeys: Object.keys(args || {}) }), 200)
+        }).catch(() => {});
+      }
       return pluginResult.result ?? null;
     }
   }

@@ -89,7 +89,7 @@ export function createObserverTaskStorage(options = {}) {
       || workspaceTaskPath(sourceStatus || "queued", String(nextTask?.id || ""));
     const savedTask = await writeTaskRecord(nextTask);
     await removeObsoleteTaskFile(sourcePath, savedTask.filePath);
-    await recordTaskBreadcrumb({
+    const transitionEvent = await recordTaskBreadcrumb({
       taskId: savedTask.id,
       eventType,
       fromStatus: sourceStatus,
@@ -102,7 +102,10 @@ export function createObserverTaskStorage(options = {}) {
       sessionId: savedTask.sessionId,
       brainId: savedTask.requestedBrainId
     });
-    return savedTask;
+    return {
+      ...savedTask,
+      latestEventSeq: Number(transitionEvent?.eventSeq || savedTask.latestEventSeq || 0)
+    };
   }
 
   async function listExistingTaskFilePaths(taskId = "") {
@@ -139,7 +142,7 @@ export function createObserverTaskStorage(options = {}) {
     for (const filePath of removedPaths) {
       await fs.rm(filePath, { force: true }).catch(() => {});
     }
-    await recordTaskBreadcrumb({
+    const removedEvent = await recordTaskBreadcrumb({
       taskId: normalizedTaskId,
       eventType: "task.removed",
       fromStatus: sourceStatus,
@@ -152,13 +155,13 @@ export function createObserverTaskStorage(options = {}) {
       sessionId: String(task?.sessionId || "").trim(),
       brainId: String(task?.requestedBrainId || "").trim()
     });
-    return [...removedPaths];
+    return Object.assign([...removedPaths], { latestEventSeq: Number(removedEvent?.eventSeq || 0) });
   }
 
   async function writeTask(task) {
     await ensureTaskQueueDirs();
     const normalizedTask = await writeTaskRecord(task);
-    await recordTaskBreadcrumb({
+    const writtenEvent = await recordTaskBreadcrumb({
       taskId: normalizedTask.id,
       eventType: "task.state_written",
       toStatus: normalizedTask.status,
@@ -168,6 +171,7 @@ export function createObserverTaskStorage(options = {}) {
       sessionId: normalizedTask.sessionId,
       brainId: normalizedTask.requestedBrainId
     });
+    normalizedTask.latestEventSeq = Number(writtenEvent?.eventSeq || normalizedTask.latestEventSeq || 0);
     return normalizedTask.filePath;
   }
 

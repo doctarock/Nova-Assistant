@@ -105,6 +105,120 @@ export function registerQueueEngineRoutes(context = {}) {
     }
   });
 
+  app.get("/api/tasks/transactions", async (req, res) => {
+    try {
+      const taskId = String(req.query.taskId || "").trim();
+      if (!taskId) {
+        return res.status(400).json({ ok: false, error: "taskId is required" });
+      }
+      const transactions = typeof context.listTransactionsForTask === "function"
+        ? await context.listTransactionsForTask(taskId)
+        : [];
+      res.json({ ok: true, taskId, transactions });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/tasks/debug-packet", async (req, res) => {
+    try {
+      const taskId = String(req.query.taskId || "").trim();
+      const limit = Number(req.query.limit || 80);
+      if (!taskId) {
+        return res.status(400).json({ ok: false, error: "taskId is required" });
+      }
+      if (typeof context.buildTaskDebugPacket !== "function") {
+        return res.status(501).json({ ok: false, error: "task debug packet is unavailable" });
+      }
+      const packet = await context.buildTaskDebugPacket(taskId, { limit });
+      res.json(packet);
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/tasks/provider-history/validate", async (req, res) => {
+    try {
+      const taskId = String(req.query.taskId || "").trim();
+      const limit = Number(req.query.limit || 200);
+      if (!taskId) {
+        return res.status(400).json({ ok: false, error: "taskId is required" });
+      }
+      if (typeof context.validateProviderHistory !== "function") {
+        return res.status(501).json({ ok: false, error: "provider history validation is unavailable" });
+      }
+      const result = await context.validateProviderHistory(taskId, { limit });
+      res.status(result.ok ? 200 : 422).json(result);
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/tasks/transactions/:transactionId/rollback", async (req, res) => {
+    try {
+      const transactionId = String(req.params.transactionId || "").trim();
+      if (!transactionId) {
+        return res.status(400).json({ ok: false, error: "transactionId is required" });
+      }
+      if (typeof context.rollbackTransaction !== "function") {
+        return res.status(501).json({ ok: false, error: "transaction rollback is unavailable" });
+      }
+      const transaction = await context.rollbackTransaction(transactionId, {
+        force: req.body?.force === true
+      });
+      res.json({ ok: true, transaction });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/tasks/transactions/:transactionId/approve", async (req, res) => {
+    try {
+      const transactionId = String(req.params.transactionId || "").trim();
+      if (!transactionId) {
+        return res.status(400).json({ ok: false, error: "transactionId is required" });
+      }
+      if (typeof context.approveTransaction !== "function") {
+        return res.status(501).json({ ok: false, error: "transaction approval is unavailable" });
+      }
+      const approved = await context.approveTransaction(transactionId, {
+        actor: String(req.body?.actor || "user").trim(),
+        notes: String(req.body?.notes || "").trim()
+      });
+      const SANDBOX_OPS = ["write_file", "edit_file", "move_path"];
+      if (!SANDBOX_OPS.includes(String(approved.operation || ""))) {
+        return res.json({ ok: true, transaction: approved });
+      }
+      if (typeof context.applyApprovedTransaction !== "function") {
+        return res.status(501).json({ ok: false, error: "transaction apply is unavailable" });
+      }
+      const result = await context.applyApprovedTransaction(transactionId);
+      res.json({ ok: true, transaction: result.transaction });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/tasks/transactions/:transactionId/reject", async (req, res) => {
+    try {
+      const transactionId = String(req.params.transactionId || "").trim();
+      if (!transactionId) {
+        return res.status(400).json({ ok: false, error: "transactionId is required" });
+      }
+      if (typeof context.rejectTransaction !== "function") {
+        return res.status(501).json({ ok: false, error: "transaction rejection is unavailable" });
+      }
+      const transaction = await context.rejectTransaction(transactionId, {
+        actor: String(req.body?.actor || "user").trim(),
+        notes: String(req.body?.notes || req.body?.reason || "").trim(),
+        reason: String(req.body?.reason || "").trim()
+      });
+      res.json({ ok: true, transaction });
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error.message });
+    }
+  });
+
   app.get("/api/tasks/reshape-issues", async (req, res) => {
     try {
       const limit = Number(req.query.limit || 12);

@@ -1,0 +1,30 @@
+{
+  "name": "openclaw-observer",
+  "version": "1.2.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "start:pm2": "pm2 start ecosystem.config.cjs --env production",
+    "stop": "pm2 stop openclaw-observer",
+    "restart": "pm2 restart openclaw-observer",
+    "logs": "pm2 logs openclaw-observer",
+    "regressions": "node ./run-regressions.js",
+    "regressions:all": "node ./run-regressions.js --suite all"
+  },
+  "dependencies": {
+    "@fontsource/manrope": "^5.2.8",
+    "express": "^4.19.2",
+    "pino": "^9.0.0",
+    "imapflow": "^1.2.12",
+    "keytar": "^7.9.0",
+    "mailparser": "^3.9.3",
+    "nodemailer": "^8.0.1",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^2.4.5",
+    "three": "^0.183.2"
+  }
+}

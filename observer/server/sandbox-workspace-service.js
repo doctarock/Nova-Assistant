@@ -107,6 +107,15 @@ function isGenericProjectName(name, genericNames) {
   return genericNames.includes(lower);
 }
 
+function parseMarkerJson(raw) {
+  try {
+    const parsed = JSON.parse(String(raw || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 async function inspectProjectCandidate(fullPath, entryName, markerFileName, genericNames) {
   const entries = await fs.readdir(fullPath, { withFileTypes: true }).catch(() => []);
   const visibleEntries = entries.filter((entry) => !String(entry.name || "").startsWith("."));
@@ -115,7 +124,7 @@ async function inspectProjectCandidate(fullPath, entryName, markerFileName, gene
   const hasMarker = await pathExists(markerPath);
   let marker = null;
   if (hasMarker) {
-    marker = JSON.parse((await fs.readFile(markerPath, "utf8").catch(() => "")) || "{}");
+    marker = parseMarkerJson(await fs.readFile(markerPath, "utf8").catch(() => ""));
   }
   const hasDirective = lowerNames.has("directive.md");
   const hasPlanning = lowerNames.has("project-todo.md") || lowerNames.has("project-role-tasks.md");

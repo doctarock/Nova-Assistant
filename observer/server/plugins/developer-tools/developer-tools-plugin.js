@@ -234,7 +234,7 @@ export function createDeveloperToolsPlugin(options = {}) {
         data: false,
         capabilities: ["getHookExplorerStats", "readHookExplorerEvents", "clearHookExplorerEvents"],
         hooks: ["*"],
-        runtimeContext: ["promptReviewService"]
+        runtimeContext: ["promptReviewService", "taskFlightRecorder", "coreTransactions"]
       },
       dependencies: {
         requiredCapabilities: [],
@@ -356,6 +356,17 @@ export function createDeveloperToolsPlugin(options = {}) {
         });
       }
 
+      // Flight Recorder — UI tab
+      if (typeof api.registerUiTab === "function") {
+        api.registerUiTab({
+          id: "flight-recorder",
+          title: "Flight Recorder",
+          icon: "F",
+          order: 85,
+          scriptUrl: "/api/plugin-ui/flight-recorder/tab.js"
+        });
+      }
+
       // State Browser — UI tab
       if (typeof api.registerUiTab === "function") {
         api.registerUiTab({
@@ -413,6 +424,27 @@ export function createDeveloperToolsPlugin(options = {}) {
       });
 
       // ── Prompt Review routes ──────────────────────────────────────────────
+      app.get("/api/plugins/developer-tools/task-debug", async (req, res) => {
+        try {
+          const taskId = String(req.query?.taskId || "").trim();
+          const limit = normalizeNumber(req.query?.limit || 80, 80, 5, 500);
+          if (!taskId) {
+            return res.status(400).json({ ok: false, error: "taskId is required" });
+          }
+          const runtime = api.getRuntimeContext();
+          const flightRecorder = runtime?.taskFlightRecorder && typeof runtime.taskFlightRecorder === "object"
+            ? runtime.taskFlightRecorder
+            : null;
+          if (!flightRecorder || typeof flightRecorder.buildDebugPacket !== "function") {
+            return res.status(503).json({ ok: false, error: "task flight recorder is unavailable" });
+          }
+          const packet = await flightRecorder.buildDebugPacket(taskId, { limit });
+          res.json(packet);
+        } catch (error) {
+          res.status(500).json({ ok: false, error: String(error?.message || error || "failed to build task debug packet") });
+        }
+      });
+
       app.get("/api/plugin-ui/prompt-review/tab.js", async (_req, res) => {
         res.type("application/javascript");
         res.sendFile(path.join(__dirname, "public", "prompt-review-tab.js"));
@@ -446,6 +478,12 @@ export function createDeveloperToolsPlugin(options = {}) {
         } catch (error) {
           res.status(500).json({ ok: false, error: String(error?.message || error || "prompt review failed") });
         }
+      });
+
+      // ── Flight Recorder routes ────────────────────────────────────────────
+      app.get("/api/plugin-ui/flight-recorder/tab.js", async (_req, res) => {
+        res.type("application/javascript");
+        res.sendFile(path.join(__dirname, "public", "flight-recorder-tab.js"));
       });
 
       // ── State Browser routes ──────────────────────────────────────────────

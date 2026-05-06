@@ -50,12 +50,17 @@ export function createObserverExecutionRunner(context = {}) {
     buildToolExecutionBatches,
     sanitizeSkillSlug,
     appendRepairLesson,
+    appendHookTrace = async () => null,
+    appendProviderHistory = async () => null,
+    appendToolStep = async () => null,
+    patchProviderSummary = async () => null,
+    writeProviderSummary = async () => null,
     OBSERVER_CONTAINER_WORKSPACE_ROOT,
     loopLessonsHostPath,
     runPluginHook = async (_, payload) => payload
   } = context;
 
-  async function executeObserverRun({
+  async function executeObserverRunCore({
     message,
     sessionId = "Main",
     brain,
@@ -124,7 +129,8 @@ export function createObserverExecutionRunner(context = {}) {
       preparedAttachmentsFiles: preparedAttachments?.files || [],
       visionImageCount: visionImages.length,
       runtimeNotesExtra,
-      internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim()
+      internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim(),
+      taskId: String(normalizedTaskContext?.taskId || "").trim()
     });
     const emitExecutionEvent = async (hookName = "", payload = {}) => {
       await runPluginHook(hookName, {
@@ -319,6 +325,21 @@ export function createObserverExecutionRunner(context = {}) {
           leaseWaitMs: 15000
         }
       );
+      await appendProviderHistory(String(normalizedTaskContext?.taskId || "").trim(), {
+        provider: "ollama",
+        model: String(brain?.model || "").trim(),
+        brainId: String(brain?.id || "").trim(),
+        step: step + 1,
+        role: "assistant",
+        ok: result.ok === true,
+        rawText: String(result.text || ""),
+        error: result.ok ? "" : String(result.stderr || "worker model failed"),
+        providerState: {
+          code: result.code,
+          timedOut: result.timedOut === true,
+          baseUrl: String(brain?.ollamaBaseUrl || "").trim()
+        }
+      }).catch(() => {});
       if (!result.ok) {
         await emitExecutionEvent("worker:execution:failed", {
           durationMs: Date.now() - startedAt,
@@ -426,6 +447,16 @@ export function createObserverExecutionRunner(context = {}) {
         }
       }
       decision = normalizeWorkerDecisionEnvelope(decision);
+      await appendProviderHistory(String(normalizedTaskContext?.taskId || "").trim(), {
+        provider: "observer-normalized",
+        model: String(brain?.model || "").trim(),
+        brainId: String(brain?.id || "").trim(),
+        step: step + 1,
+        role: "assistant_decision",
+        ok: true,
+        normalizedDecision: decision,
+        rawText: ""
+      }).catch(() => {});
       if (isEchoedToolResultEnvelope(decision)) {
         echoedToolResultsCount += 1;
         if (echoedToolResultsCount === 1) {
@@ -1166,6 +1197,19 @@ export function createObserverExecutionRunner(context = {}) {
             taskId: String(normalizedTaskContext?.taskId || "").trim(),
             sessionId: String(sessionId || "").trim()
           }).catch(() => {});
+          await appendToolStep(String(normalizedTaskContext?.taskId || "").trim(), {
+            step: step + 1,
+            toolCallId: String(toolCall?.id || "").trim(),
+            name,
+            argsPreview: JSON.stringify(parsedArgs || {}),
+            transportOk: true,
+            semanticOk,
+            durationMs: Date.now() - toolCallStartedAt,
+            toolResult,
+            transactionId: String(toolResult?.transactionId || "").trim(),
+            error: semanticError,
+            resultPreview: JSON.stringify(toolResult || {}).slice(0, 4000)
+          }).catch(() => {});
           return outcome;
         } catch (error) {
           const permissionApprovalRequired = error?.permissionApprovalRequired === true
@@ -1208,6 +1252,17 @@ export function createObserverExecutionRunner(context = {}) {
             error: String(error?.message || error || "tool call failed"),
             taskId: String(normalizedTaskContext?.taskId || "").trim(),
             sessionId: String(sessionId || "").trim()
+          }).catch(() => {});
+          await appendToolStep(String(normalizedTaskContext?.taskId || "").trim(), {
+            step: step + 1,
+            toolCallId: String(toolCall?.id || "").trim(),
+            name,
+            argsPreview: JSON.stringify(parsedArgs || {}),
+            transportOk: false,
+            semanticOk: false,
+            durationMs: Date.now() - toolCallStartedAt,
+            failureClass: String(error?.failureClass || error?.code || "").trim(),
+            error: String(error?.message || error || "tool call failed")
           }).catch(() => {});
           return {
             toolCall,
@@ -1260,7 +1315,17 @@ export function createObserverExecutionRunner(context = {}) {
               };
             }
             if (outcome?.requiresUserApproval) {
-              return buildPermissionApprovalWaitingResponse(outcome.permissionApproval || {});
+              const approval = outcome.permissionApproval || {};
+              const taskId = String(normalizedTaskContext?.taskId || "").trim();
+              if (taskId) {
+                appendHookTrace(taskId, {
+                  hook: "approval:policy",
+                  pluginId: "",
+                  effect: `permission_rule_approval triggered for tool "${String(approval.toolName || "").trim()}"${approval.ruleId ? ` (rule: ${approval.ruleId})` : ""}`,
+                  payloadPreview: compactTaskText(JSON.stringify({ toolName: approval.toolName, ruleId: approval.ruleId, reason: approval.reason }), 200)
+                }).catch(() => {});
+              }
+              return buildPermissionApprovalWaitingResponse(approval);
             }
             applyToolOutcome(outcome);
           }
@@ -1287,7 +1352,17 @@ export function createObserverExecutionRunner(context = {}) {
             };
           }
           if (outcome?.requiresUserApproval) {
-            return buildPermissionApprovalWaitingResponse(outcome.permissionApproval || {});
+            const approval = outcome.permissionApproval || {};
+            const taskId = String(normalizedTaskContext?.taskId || "").trim();
+            if (taskId) {
+              appendHookTrace(taskId, {
+                hook: "approval:policy",
+                pluginId: "",
+                effect: `permission_rule_approval triggered for tool "${String(approval.toolName || "").trim()}"${approval.ruleId ? ` (rule: ${approval.ruleId})` : ""}`,
+                payloadPreview: compactTaskText(JSON.stringify({ toolName: approval.toolName, ruleId: approval.ruleId, reason: approval.reason }), 200)
+              }).catch(() => {});
+            }
+            return buildPermissionApprovalWaitingResponse(approval);
           }
           applyToolOutcome(outcome);
         }
@@ -1433,6 +1508,21 @@ export function createObserverExecutionRunner(context = {}) {
       stderr: buildToolLoopStopMessage(toolLoopDiagnostics.stopReason, toolLoopDiagnostics),
       toolLoopDiagnostics
     };
+  }
+
+  async function executeObserverRun(args = {}) {
+    const result = await executeObserverRunCore(args);
+    const taskId = String(args.taskContext?.taskId || args.taskContext?.id || "").trim();
+    if (taskId) {
+      const outcome = result.waitingForUser ? "waiting_for_user" : (result.ok ? "completed" : "failed");
+      const stopReason = String(result.toolLoopDiagnostics?.stopReason || (result.timedOut ? "timed_out" : "")).trim();
+      patchProviderSummary(taskId, {
+        lastRunOutcome: outcome,
+        lastRunAt: Date.now(),
+        ...(stopReason ? { lastRunStopReason: stopReason } : {})
+      }).catch(() => {});
+    }
+    return result;
   }
 
   return {

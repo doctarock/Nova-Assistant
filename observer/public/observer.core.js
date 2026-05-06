@@ -188,6 +188,7 @@ let queueDisplayActive = false;
 let historyEntries = [];
 let queueSequence = 0;
 let latestTaskEventTs = 0;
+let latestObserverEventSeq = 0;
 let queueDispatchInFlight = false;
 let latestTaskSnapshot = { queued: [], waiting: [], inProgress: [], done: [], failed: [], repairMonitor: { active: [], reviews: [], recent: [], summary: {} } };
 let activeTaskFilePath = "";
