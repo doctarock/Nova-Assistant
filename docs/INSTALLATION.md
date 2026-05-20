@@ -1,7 +1,5 @@
 # Local AI Home Assistant Installation
 
-These notes were verified on this machine from `C:\AI\repositories\DerpyClaw\local-ai-home-assistant-main`.
-
 ## What Was Installed
 
 - Repository: `doctarock/local-ai-home-assistant`
