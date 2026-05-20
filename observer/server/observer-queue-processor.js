@@ -174,6 +174,7 @@ export function createObserverQueueProcessor(context = {}) {
           updatedAt: startedAt,
           startedAt,
           queueLane: String(task.queueLane || "").trim(),
+          provider: String(task.provider || brain?.provider || "ollama").trim() || "ollama",
           ollamaBaseUrl: normalizeOllamaBaseUrl(String(task.ollamaBaseUrl || "").trim() || String(brain?.ollamaBaseUrl || "").trim()),
           dispatchCount: Number(task.dispatchCount || 0) + 1,
           specialistAttemptedBrainIds: [
@@ -401,6 +402,7 @@ export function createObserverQueueProcessor(context = {}) {
             taskContext: {
               taskId: String(inProgressTask.id || "").trim(),
               sessionId: String(inProgressTask.sessionId || "").trim(),
+              internalJobType: String(inProgressTask.internalJobType || "").trim(),
               taskMeta: inProgressTask.taskMeta && typeof inProgressTask.taskMeta === "object"
                 ? inProgressTask.taskMeta
                 : {}
@@ -570,7 +572,12 @@ export function createObserverQueueProcessor(context = {}) {
                 previousTaskId: finalTask.id,
                 failureClassification,
                 capabilityMismatchSuspected: finalTask.capabilityMismatchSuspected === true,
-                transportFailoverSuggested: finalTask.transportFailoverSuggested === true
+                transportFailoverSuggested: finalTask.transportFailoverSuggested === true,
+                notBeforeAt: Date.now() + (
+                  finalTask.transportFailoverSuggested ? 60000
+                  : finalTask.capabilityMismatchSuspected ? 20000
+                  : 15000
+                )
               })
             });
             finalTask.notes = compactTaskText(
@@ -655,13 +662,9 @@ export function createObserverQueueProcessor(context = {}) {
           const schedulerSeriesId = String(nextScheduler.seriesId || "").trim();
           let alreadyQueuedForSeries = false;
           if (schedulerSeriesId) {
-            const [queuedPeriodicTasks, runningPeriodicTasks] = await Promise.all([
-              listTasksByFolder(TASK_QUEUE_INBOX, "queued"),
-              listTasksByFolder(TASK_QUEUE_IN_PROGRESS, "in_progress")
-            ]);
-            alreadyQueuedForSeries = [...queuedPeriodicTasks, ...runningPeriodicTasks].some((entry) =>
-              String(entry.id || "") !== String(finalTask.id || "")
-              && String(entry.scheduler?.seriesId || "").trim() === schedulerSeriesId
+            const queuedPeriodicTasks = await listTasksByFolder(TASK_QUEUE_INBOX, "queued");
+            alreadyQueuedForSeries = queuedPeriodicTasks.some((entry) =>
+              String(entry.scheduler?.seriesId || "").trim() === schedulerSeriesId
             );
           }
           if (!alreadyQueuedForSeries) {
@@ -683,7 +686,12 @@ export function createObserverQueueProcessor(context = {}) {
                   ...nextScheduler,
                   lastCompletedAt: completedAt
                 },
-                notBeforeAt: completedAt + Number(nextScheduler.everyMs || 0)
+                notBeforeAt: (() => {
+                  const everyMs = Number(nextScheduler.everyMs || 0);
+                  const taskStartedAt = Number(inProgressTask.updatedAt || inProgressTask.createdAt || completedAt);
+                  const taskDurationMs = Math.max(0, completedAt - taskStartedAt);
+                  return completedAt + Math.max(Math.round(everyMs * 0.5), everyMs - taskDurationMs);
+                })()
               }
             });
           }

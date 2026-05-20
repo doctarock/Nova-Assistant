@@ -83,6 +83,10 @@ export function createObserverRecreationJob(context = {}) {
     const hostPersonalNotesPath = promptMemoryPersonalDailyRoot && path
       ? path.join(promptMemoryPersonalDailyRoot, `${todayKey}.md`)
       : "";
+    const hostPersonalNotesBefore = hostPersonalNotesPath && typeof readVolumeFile === "function"
+      ? await readVolumeFile(hostPersonalNotesPath).catch(() => "")
+      : "";
+    const meaningfulHostNotesBefore = extractMeaningfulPersonalNotes(hostPersonalNotesBefore, todayKey);
 
     const message = [
       `It is ${dateLabel}. You have unstructured free time right now - no tasks assigned, no deliverables expected.`,
@@ -98,9 +102,9 @@ export function createObserverRecreationJob(context = {}) {
       "There's no right answer. Just don't spend the time doing nothing.",
       "",
       `Record whatever you do or think in the host-backed daily personal notes for ${todayKey}.`,
-      `Preferred method: call update_daily_personal_notes with {"date":"${todayKey}","content":"...","mode":"append"}.`,
+      `Required method: call update_daily_personal_notes with {"date":"${todayKey}","content":"...","mode":"append"}.`,
       `The sandbox workspace copy for reference is: ${workspacePersonalMemoryPath}/${todayKey}.md`,
-      "Do not write to the legacy path under openclaw-observer/.agent-workspaces/nova; that path is stale.",
+      "Do not write to the legacy path under nova-observer/.agent-workspaces/nova; that path is stale.",
       "",
       "When you're done, return final=true with a brief natural-language description of what you did."
     ].join("\n");
@@ -114,12 +118,21 @@ export function createObserverRecreationJob(context = {}) {
       forceToolUse: true,
       preset: "internal-recreation",
       attachments: [],
+      taskContext: {
+        taskId: String(task?.id || "").trim(),
+        sessionId: String(task?.sessionId || "scheduler").trim(),
+        internalJobType: "agent_recreation",
+        taskMeta: {
+          ...(task?.taskMeta && typeof task.taskMeta === "object" ? task.taskMeta : {}),
+          internalJobType: "agent_recreation"
+        }
+      },
       runtimeNotesExtra: [
         "This is unstructured free time - there are no mandatory deliverables and no workspace project targets.",
-        `You MUST persist a real reflection before returning final=true. Preferred tool: update_daily_personal_notes for date ${todayKey}.`,
+        `Before final=true, call update_daily_personal_notes for date ${todayKey}.`,
         `Host-backed daily personal notes path: ${hostPersonalNotesPath || `(unavailable host path for ${todayKey})`}.`,
         `Sandbox workspace copy: ${workspacePersonalMemoryPath}/${todayKey}.md.`,
-        "Do not use or recreate the legacy path under /home/openclaw/.observer-sandbox/workspace/openclaw-observer/.agent-workspaces/nova/...",
+        "Do not use or recreate the legacy path under /home/openclaw/.observer-sandbox/workspace/nova-observer/.agent-workspaces/nova/...",
         "A genuine browse result, a thought, a creative fragment, or a project idea all qualify.",
         "Do not claim to have browsed or read something you have not actually fetched.",
         "Do not produce a summary of what you plan to do instead of doing it."
@@ -135,27 +148,24 @@ export function createObserverRecreationJob(context = {}) {
       hostPersonalNotes = await readVolumeFile(hostPersonalNotesPath).catch(() => "");
     }
     const meaningfulHostNotes = extractMeaningfulPersonalNotes(hostPersonalNotes, todayKey);
-    const noteRecorded = Boolean(meaningfulHostNotes);
+    const noteRecorded = Boolean(meaningfulHostNotes && meaningfulHostNotes !== meaningfulHostNotesBefore);
+    const runCompleted = runResponse?.ok === true && noteRecorded;
 
     const summaryText = String(
       runResponse?.parsed?.result?.payloads?.[0]?.text
       || runResponse?.stdout
-      || (noteRecorded ? `Recorded a personal reflection in daily notes for ${todayKey}.` : "Recreation cycle complete.")
+      || (noteRecorded ? `Recorded a personal reflection in daily notes for ${todayKey}.` : `Recreation cycle did not record daily personal notes for ${todayKey}.`)
     ).trim().slice(0, 400);
 
-    const errorText = noteRecorded
-      ? String(runResponse?.stderr || "").trim()
-      : [
-          hostPersonalNotesPath
-            ? `Daily personal notes were not updated at ${hostPersonalNotesPath}.`
-            : "Daily personal notes were not updated.",
-          String(runResponse?.stderr || "").trim()
-        ].filter(Boolean).join(" ");
+    const errorText = String(
+      runResponse?.stderr
+      || (noteRecorded ? "" : `Recreation cycle did not record daily personal notes for ${todayKey}.`)
+    ).trim();
 
     return {
-      ok: noteRecorded,
-      code: noteRecorded ? 0 : (runResponse?.code ?? 1),
-      timedOut: runResponse?.timedOut === true && !noteRecorded,
+      ok: runCompleted,
+      code: runCompleted ? 0 : 1,
+      timedOut: runResponse?.timedOut === true && !runCompleted,
       preset: "internal-recreation",
       brain,
       network: internetEnabled ? "public" : "local",

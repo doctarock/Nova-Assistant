@@ -406,8 +406,26 @@ async function runIntakeWithOptionalRewrite({
     ? looksLikeFollowUpMessage(originalMessage, recentExchanges)
     : false;
 
+  const conversationalNativeResponse = await tryBuildObserverNativeResponse(originalMessage, {
+    recentExchanges,
+    sessionId,
+    conversationOnly: true
+  });
+  if (conversationalNativeResponse && String(conversationalNativeResponse.type || "").trim() === "conversation") {
+    return {
+      effectiveMessage: originalMessage,
+      originalMessage,
+      nativeResponse: conversationalNativeResponse,
+      intakePlan: null,
+      rewrite: null
+    };
+  }
+
   if (!isFollowUp) {
-    const firstNativeResponse = await tryBuildObserverNativeResponse(originalMessage);
+    const firstNativeResponse = await tryBuildObserverNativeResponse(originalMessage, {
+      recentExchanges,
+      sessionId
+    });
     if (firstNativeResponse) {
       return {
         effectiveMessage: originalMessage,
@@ -453,7 +471,10 @@ async function runIntakeWithOptionalRewrite({
     };
   }
 
-  const rewrittenNativeResponse = !isFollowUp ? await tryBuildObserverNativeResponse(rewrittenMessage) : null;
+  const rewrittenNativeResponse = !isFollowUp ? await tryBuildObserverNativeResponse(rewrittenMessage, {
+    recentExchanges,
+    sessionId
+  }) : null;
   if (rewrittenNativeResponse) {
     return {
       effectiveMessage: rewrittenMessage,

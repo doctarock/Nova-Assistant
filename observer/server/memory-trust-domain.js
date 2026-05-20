@@ -873,6 +873,112 @@ export function createMemoryTrustDomain(context = {}) {
     }
   }
 
+  async function queryRepairLessons(keywords = [], preloadedContent = null) {
+    const normalized = (Array.isArray(keywords) ? keywords : [])
+      .map((k) => String(k || "").toLowerCase().trim())
+      .filter((k) => k.length >= 4);
+    if (!normalized.length) return [];
+    try {
+      const lessonsPath = context.path.join(context.promptFilesRoot, "LOOP-LESSONS.md");
+      const content = preloadedContent !== null
+        ? String(preloadedContent || "")
+        : await context.fs.readFile(lessonsPath, "utf8").catch(() => "");
+      const trimmed = String(content || "").trim();
+      const results = [];
+      if (trimmed) {
+        const blocks = [];
+        let current = [];
+        for (const line of trimmed.split("\n")) {
+          if (line.startsWith("## ") && current.length) {
+            blocks.push(current.join("\n").trim());
+            current = [line];
+          } else {
+            current.push(line);
+          }
+        }
+        if (current.length) blocks.push(current.join("\n").trim());
+        const scored = blocks
+          .filter((b) => b.startsWith("## ") && !b.startsWith("## PERMANENT RULE"))
+          .map((block) => {
+            const lower = block.toLowerCase();
+            const score = normalized.reduce((n, kw) => n + (lower.includes(kw) ? 1 : 0), 0);
+            return { block, score };
+          })
+          .filter(({ score }) => score > 0)
+          .sort((a, b) => b.score - a.score);
+        results.push(...scored.slice(0, 3).map(({ block }) => block));
+      }
+      if (typeof context.searchChunks === "function") {
+        try {
+          const qdrantResult = await context.searchChunks(normalized.slice(0, 8).join(" "), {}, { limit: 3, syncBeforeSearch: false });
+          const highScoreMatches = Array.isArray(qdrantResult?.matches)
+            ? qdrantResult.matches.filter((m) => Number(m?.score || 0) >= 0.6)
+            : [];
+          if (highScoreMatches.length) {
+            const lines = highScoreMatches.map((match) => {
+              const payload = match.payload || {};
+              const src = String(payload.relative_path || payload.source_path || payload.doc_id || "").trim();
+              const preview = String(payload.text || "").replace(/\s+/g, " ").slice(0, 280).trim();
+              return src ? `- [${src}]: ${preview}` : `- ${preview}`;
+            }).filter(Boolean);
+            if (lines.length) {
+              results.push(`## Relevant workspace context\n${lines.join("\n")}`);
+            }
+          }
+        } catch { }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  async function appendSuccessLesson({
+    timestamp = new Date().toISOString(),
+    taskMessage = "",
+    brainId = "",
+    specialty = "",
+    toolsUsed = [],
+    changedFiles = 0
+  } = {}) {
+    try {
+      const SUCCESS_CAP = 50;
+      const lessonsPath = context.path.join(context.promptFilesRoot, "SUCCESS-LESSONS.md");
+      const compact = (s, n) => String(s || "").replace(/\s+/g, " ").slice(0, n).trim();
+      const existing = await context.fs.readFile(lessonsPath, "utf8").catch(() => "");
+      const fileHeader = `# Worker Success Patterns\n\nCompleted executions. Use these as examples of what worked.`;
+      const blocks = [];
+      let current = [];
+      for (const line of (existing || "").split("\n")) {
+        if (line.startsWith("## ") && current.length) {
+          blocks.push(current.join("\n").trim());
+          current = [line];
+        } else {
+          current.push(line);
+        }
+      }
+      if (current.length) blocks.push(current.join("\n").trim());
+      const regularBlocks = blocks.filter((b) => b.startsWith("## "));
+      const newEntry = [
+        `## ${timestamp}`,
+        compact(taskMessage, 200) ? `- Task: ${compact(taskMessage, 200)}` : "",
+        brainId ? `- Brain: ${brainId}` : "",
+        specialty ? `- Specialty: ${specialty}` : "",
+        toolsUsed.length ? `- Tools: ${toolsUsed.slice(0, 6).join(", ")}` : "",
+        changedFiles > 0 ? `- Changed files: ${changedFiles}` : "",
+        ""
+      ].filter(Boolean).join("\n");
+      const pruned = [...regularBlocks, newEntry].slice(-SUCCESS_CAP);
+      await context.fs.writeFile(
+        lessonsPath,
+        [fileHeader, ...pruned].filter(Boolean).join("\n") + "\n",
+        "utf8"
+      );
+    } catch {
+      // non-fatal
+    }
+  }
+
   async function appendRepairLesson({
     timestamp = new Date().toISOString(),
     taskMessage = "",
@@ -880,21 +986,52 @@ export function createMemoryTrustDomain(context = {}) {
     repairNote = ""
   } = {}) {
     try {
+      const LESSONS_CAP = 100;
       const lessonsPath = context.path.join(context.promptFilesRoot, "LOOP-LESSONS.md");
       const compact = (s, n) => String(s || "").replace(/\s+/g, " ").slice(0, n).trim();
-      const entry = [
+      const existing = await context.fs.readFile(lessonsPath, "utf8").catch(() => "");
+      const fileHeader = `# Loop Repair Lessons\n\nPatterns that caused tool loop repairs. Avoid repeating these.`;
+      // Parse existing blocks
+      const blocks = [];
+      let current = [];
+      for (const line of (existing || "").split("\n")) {
+        if (line.startsWith("## ") && current.length) {
+          blocks.push(current.join("\n").trim());
+          current = [line];
+        } else {
+          current.push(line);
+        }
+      }
+      if (current.length) blocks.push(current.join("\n").trim());
+      const permanentBlocks = blocks.filter((b) => b.startsWith("## PERMANENT RULE"));
+      const regularBlocks = blocks.filter((b) => b.startsWith("## ") && !b.startsWith("## PERMANENT RULE"));
+      // Skip if an identical lesson (same stuck-tool + repair-prefix) exists in the recent window
+      const newStuckTool = String(compact(repeatedCalls, 300) || "").split(/[\s,]/)[0].toLowerCase();
+      const newRepairPrefix = compact(repairNote, 40).toLowerCase();
+      const recentWindow = regularBlocks.slice(-20);
+      const isDuplicate = newStuckTool && newRepairPrefix && recentWindow.some((block) => {
+        const stuckMatch = block.match(/^- Stuck on: (.+)$/m);
+        const repairMatch = block.match(/^- Repair: (.{0,40})/m);
+        const stuckTool = String(stuckMatch?.[1] || "").split(/[\s,]/)[0].toLowerCase();
+        const repairPrefix = String(repairMatch?.[1] || "").toLowerCase().slice(0, 40);
+        return stuckTool === newStuckTool && repairPrefix === newRepairPrefix;
+      });
+      if (isDuplicate) {
+        return;
+      }
+      const newEntry = [
         `## ${timestamp}`,
         compact(taskMessage, 200) ? `- Task: ${compact(taskMessage, 200)}` : "",
         compact(repeatedCalls, 300) ? `- Stuck on: ${compact(repeatedCalls, 300)}` : "",
         repairNote ? `- Repair: ${compact(repairNote, 200)}` : "",
         ""
-      ].filter(Boolean).join("\n") + "\n";
-      const existing = await context.fs.readFile(lessonsPath, "utf8").catch(() => "");
-      if (!existing.trim()) {
-        await context.fs.writeFile(lessonsPath, `# Loop Repair Lessons\n\nPatterns that caused tool loop repairs. Avoid repeating these.\n\n${entry}`, "utf8");
-      } else {
-        await context.fs.appendFile(lessonsPath, entry, "utf8");
-      }
+      ].filter(Boolean).join("\n");
+      const updatedRegular = [...regularBlocks, newEntry];
+      const pruned = updatedRegular.length > LESSONS_CAP
+        ? updatedRegular.slice(-LESSONS_CAP)
+        : updatedRegular;
+      const parts = [fileHeader, ...permanentBlocks, ...pruned].filter(Boolean);
+      await context.fs.writeFile(lessonsPath, parts.join("\n") + "\n", "utf8");
     } catch {
       // non-fatal
     }
@@ -906,6 +1043,8 @@ export function createMemoryTrustDomain(context = {}) {
     appendDailyAssistantMemory,
     appendDailyOperationalMemory,
     appendRepairLesson,
+    appendSuccessLesson,
+    queryRepairLessons,
     appendDailyQuestionLog,
     applyQuestionMaintenanceAnswer,
     assessEmailSourceIdentity,

@@ -162,6 +162,7 @@ export function createInitialObserverConfig({ localOllamaBaseUrl = "" } = {}) {
       endpoints: {
         local: {
           label: "Local Ollama",
+          provider: "ollama",
           baseUrl: localOllamaBaseUrl
         }
       },
@@ -179,7 +180,11 @@ export function createInitialObserverConfig({ localOllamaBaseUrl = "" } = {}) {
         code: [],
         document: [],
         general: [],
-        background: []
+        background: [],
+        creative: [],
+        vision: [],
+        retrieval: [],
+        fast_worker: []
       },
       fallbackAttempts: 2
     },

@@ -16,7 +16,9 @@ export function createObserverFailureDomain(options = {}) {
     if (/\bfetch failed\b/.test(lower)) return "tool_fetch_failed";
     if (/\btimeout\b|\btimed out\b/.test(lower)) return "timeout";
     if (/\binvalid json\b|\bjson parse\b|\bmalformed json\b/.test(lower)) return "invalid_json";
-    if (/\btool plan repeated\b|\brepeated tool plan\b/.test(lower)) return "repeated_tool_plan";
+    if (/\bloop repair.*did not hold\b/.test(lower)) return "loop_repair_failed";
+    if (/\btool plan repeated\b|\brepeated tool plan\b|\brepeated the same tool plan\b/.test(lower)) return "repeated_tool_plan";
+    if (/\bplanner.*could not repair it\b/.test(lower)) return "loop_repair_failed";
     if (/\blow-value tool loop\b|\btool loop\b|\busing tools without concrete progress\b/.test(lower)) return "low_value_tool_loop";
     if (/\bno inspection\b|\bwithout any concrete inspection\b/.test(lower)) return "no_inspection";
     if (/\bspeculative\b|\bfuture-tense\b/.test(lower)) return "speculative_completion";
@@ -29,6 +31,7 @@ export function createObserverFailureDomain(options = {}) {
     if (/\bproject-cycle finalization\b/.test(lower) && /\bdocumentation-only changes\b/.test(lower)) return "project_documentation_only_mismatch";
     if (/\binvalid envelope\b|\bechoed tool results\b/.test(lower)) return "invalid_envelope";
     if (/\bempty final response\b/.test(lower)) return "empty_final_response";
+    if (/\bcould not.*capability\b|\btool unavailable\b|\bmissing capability\b|\bunsupported tool\b/.test(lower)) return "capability_unavailable";
     if (/\bstalled\b/.test(lower)) return "stalled";
     return "unknown";
   }
@@ -46,7 +49,7 @@ export function createObserverFailureDomain(options = {}) {
 
   function isCapabilityMismatchFailure(classification = "", task = {}) {
     const normalized = String(classification || "").trim().toLowerCase();
-    if (["no_inspection", "no_concrete_outcome", "speculative_completion", "repeated_tool_plan", "low_value_tool_loop"].includes(normalized)) {
+    if (["no_inspection", "no_concrete_outcome", "speculative_completion", "repeated_tool_plan", "low_value_tool_loop", "loop_repair_failed", "capability_unavailable"].includes(normalized)) {
       if (normalized === "low_value_tool_loop") {
         const diagnostics = task?.toolLoopDiagnostics && typeof task.toolLoopDiagnostics === "object" ? task.toolLoopDiagnostics : null;
         const hadConcreteProgress = diagnostics && (Number(diagnostics.concreteProgressStepCount || 0) > 0 || (Array.isArray(diagnostics.uniqueConcreteInspectionTargets) && diagnostics.uniqueConcreteInspectionTargets.length > 0));
@@ -102,13 +105,14 @@ export function createObserverFailureDomain(options = {}) {
     const primaryTarget = String(task?.projectWorkPrimaryTarget || "").trim();
     const secondaryTarget = String(task?.projectWorkSecondaryTarget || "").trim();
     const tertiaryTarget = String(task?.projectWorkTertiaryTarget || "").trim();
+    const projectsRuntime = getProjectsRuntime();
     const expectedFirstMove = String(task?.projectWorkExpectedFirstMove || "").trim()
-      || getProjectsRuntime()?.extractTaskDirectiveValue?.(baseMessage, "Expected first move:");
-    const inspectFirst = getProjectsRuntime()?.extractTaskDirectiveValue?.(baseMessage, "Inspect first:")
+      || projectsRuntime?.extractTaskDirectiveValue?.(baseMessage, "Expected first move:");
+    const inspectFirst = projectsRuntime?.extractTaskDirectiveValue?.(baseMessage, "Inspect first:")
       || (projectPath && primaryTarget ? `${projectPath}/${primaryTarget}` : "");
-    const inspectSecond = getProjectsRuntime()?.extractTaskDirectiveValue?.(baseMessage, "Inspect second if needed:")
+    const inspectSecond = projectsRuntime?.extractTaskDirectiveValue?.(baseMessage, "Inspect second if needed:")
       || (projectPath && secondaryTarget ? `${projectPath}/${secondaryTarget}` : "");
-    const inspectThird = getProjectsRuntime()?.extractTaskDirectiveValue?.(baseMessage, "Inspect third if needed:")
+    const inspectThird = projectsRuntime?.extractTaskDirectiveValue?.(baseMessage, "Inspect third if needed:")
       || (projectPath && tertiaryTarget ? `${projectPath}/${tertiaryTarget}` : "");
     const retryLines = [];
     const normalizedFailure = String(failureClassification || "").trim().toLowerCase();

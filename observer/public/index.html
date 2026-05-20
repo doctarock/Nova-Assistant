@@ -29,16 +29,7 @@
             <div class="controls stage-controls" style="grid-template-columns: 120px;">
               <input id="sessionId" value="Main" />
             </div>
-                <div class="voice-row">
-                  <div class="voice-button-stack">
-                    <button id="voiceToggleBtn" class="secondary" type="button">Enable voice</button>
-                    <div id="voiceTrust" class="voice-trust voice-trust-warn">Voice trust: open</div>
-                  </div>
-                  <div>
-                    <div id="voiceStatus" class="voice-status">Passive listening is off.</div>
-                    <div id="voiceMeta" class="voice-meta">No voice activity yet.</div>
-                  </div>
-                </div>
+
           </div>
           <div class="stage-overlay">
             <div class="composer">
@@ -48,9 +39,13 @@
                 <div style="max-width:350px;" class="attachment-row">
                   <input id="fileInput" type="file" multiple />
                   <div id="attachmentList" class="attachment-list micro">No files attached.</div>
+                  <div id="voiceTrust" class="voice-trust voice-trust-warn">Voice trust: open</div>
+                  <div id="voiceStatus" class="voice-status">Passive listening is off.</div>
+                  <div id="voiceMeta" class="voice-meta">No voice activity yet.</div>
                 </div>
                 <div class="prompt-actions">
                   <button id="runBtn">Run agent</button>
+                    <button id="voiceToggleBtn" class="secondary" type="button">Enable voice</button>
                   <button id="clearBtn" class="secondary">Clear</button>
                 </div>
               </div>
@@ -79,7 +74,7 @@
 
         <div class="drawer-content">
         <div class="drawer-head">
-          <button id="panelCloseBtn" class="secondary" type="button">Full screen panels</button>
+          <button id="panelCloseBtn" class="secondary" type="button">"|<- ->|"</button>
         </div>
         <div id="systemTab" class="tab-panel">
           <div class="inspector">
@@ -215,7 +210,7 @@
                   </div>
                 </div>
                 <div class="hint" id="regressionCommandHint">Preparing terminal command...</div>
-                <pre id="regressionCommandLine" class="json-box">node openclaw-observer/run-regressions.js --suite 'all'</pre>
+                <pre id="regressionCommandLine" class="json-box">node nova-observer/run-regressions.js --suite 'all'</pre>
                 <div class="panel-head compact">
                   <div>
                     <h3>Latest run</h3>
@@ -605,6 +600,7 @@
             <div class="capabilities-subtab-bar" role="tablist" aria-label="Capabilities sections">
               <button class="capabilities-subtab-button active" type="button" data-capabilities-subtab-target="capabilitiesToolsPanel">Tools</button>
               <button class="capabilities-subtab-button" type="button" data-capabilities-subtab-target="capabilitiesSkillsPanel">Skills</button>
+              <button class="capabilities-subtab-button" type="button" data-capabilities-subtab-target="capabilitiesAgentSkillsPanel">Agent Skills</button>
               <button class="capabilities-subtab-button" type="button" data-capabilities-subtab-target="capabilitiesRequestsPanel">Requests</button>
             </div>
 
@@ -629,6 +625,19 @@
                   </div>
                 </div>
                 <div id="installedSkillsList" class="stack-list">Loading installed skills...</div>
+              </section>
+            </section>
+
+            <section id="capabilitiesAgentSkillsPanel" class="capabilities-subtab-panel">
+              <section class="brain-editor-card">
+                <div class="panel-head compact">
+                  <div>
+                    <h3>Agent Skills</h3>
+                    <div class="panel-subtle">Prompt-based skills that Nova can invoke on local models via Dogpile. Drop a JSON file into <code>agent-skills/</code> to add new ones.</div>
+                  </div>
+                  <button id="refreshAgentSkillsBtn" class="secondary" type="button">Refresh</button>
+                </div>
+                <div id="agentSkillsList" class="stack-list">Loading agent skills...</div>
               </section>
             </section>
 
@@ -811,6 +820,12 @@
   <script src="/observer.voice.js"></script>
   <script src="/observer.render.js"></script>
   <script src="/observer.runtime.js"></script>
+  <script src="/observer.plugins.js"></script>
+  <script src="/observer.secrets.js"></script>
+  <script src="/observer.regressions.js"></script>
+  <script src="/observer.speech.js"></script>
+  <script src="/observer.state-browser.js"></script>
+  <script src="/observer.config.js"></script>
   <script src="/observer.js"></script>
 </body>
 </html>

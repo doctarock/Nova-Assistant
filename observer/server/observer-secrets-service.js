@@ -1,6 +1,6 @@
 import keytar from "keytar";
 
-const DEFAULT_SERVICE_NAME = "openclaw-observer";
+const DEFAULT_SERVICE_NAME = "nova-observer";
 
 export function createObserverSecretsService({ serviceName = DEFAULT_SERVICE_NAME } = {}) {
   function normalizeSecretHandle(value = "") {

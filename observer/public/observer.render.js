@@ -514,7 +514,7 @@ function setPanelFullscreen(isFullscreen) {
   const nextFullscreen = Boolean(isFullscreen);
   panelDrawerEl.classList.toggle("fullscreen", nextFullscreen);
   if (panelCloseBtn) {
-    panelCloseBtn.textContent = nextFullscreen ? "Exit full screen" : "Full screen panels";
+    panelCloseBtn.textContent = nextFullscreen ? "->|" : "|<- ->|";
     panelCloseBtn.setAttribute("aria-pressed", nextFullscreen ? "true" : "false");
     panelCloseBtn.title = nextFullscreen ? "Return panels to normal width" : "Stretch panels full screen";
     panelCloseBtn.setAttribute("aria-label", nextFullscreen ? "Exit full screen panels" : "Stretch panels full screen");
@@ -616,12 +616,23 @@ function activateCapabilitiesSubtab(tabId) {
 }
 
 function activateSystemSubtab(tabId) {
-  activeSystemSubtabId = tabId || "systemGatewayPanel";
-  systemSubtabPanels.forEach((panel) => {
-    panel.classList.toggle("active", panel.id === activeSystemSubtabId);
+  const systemTabRoot = document.getElementById("systemTab");
+  const panels = systemTabRoot
+    ? Array.from(systemTabRoot.querySelectorAll(".system-subtab-panel"))
+    : systemSubtabPanels;
+  const buttons = systemTabRoot
+    ? Array.from(systemTabRoot.querySelectorAll("[data-system-subtab-target]"))
+    : systemSubtabButtons;
+  const requestedId = String(tabId || "systemGatewayPanel").trim() || "systemGatewayPanel";
+  const resolvedId = panels.some((panel) => panel.id === requestedId)
+    ? requestedId
+    : (panels[0]?.id || "systemGatewayPanel");
+  activeSystemSubtabId = resolvedId;
+  panels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === resolvedId);
   });
-  systemSubtabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.systemSubtabTarget === activeSystemSubtabId);
+  buttons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.systemSubtabTarget === resolvedId);
   });
 }
 
@@ -891,6 +902,16 @@ function enqueueUpdate(item, options = {}) {
   historyEntries.unshift(entry);
   historyEntries = historyEntries.slice(0, 120);
   renderHistory();
+  if (observerApp.getNovaConfigDraft?.()?.app?.quietMode === true) {
+    const isProgressOnly = entry.source === "task"
+      && !entry.questionTime
+      && entry.status !== "completed"
+      && entry.status !== "failed"
+      && entry.status !== "waiting_for_user";
+    if (isProgressOnly) {
+      return;
+    }
+  }
   if (options.priority) {
     updateQueue.unshift(entry);
   } else {
@@ -1238,11 +1259,7 @@ function toWorkspaceRelativePath(task) {
   if (workspacePath.startsWith("/workspace-dev/")) {
     return workspacePath.slice("/workspace-dev/".length);
   }
-  if (
-    workspacePath.startsWith("task-queue/")
-    || workspacePath.startsWith("observer-task-queue/")
-    || workspacePath.startsWith("derpy-observer-task-queue/")
-  ) {
+  if (workspacePath.startsWith("derpy-observer-task-queue/")) {
     return workspacePath;
   }
   const filePath = String(task?.filePath || "").trim().replaceAll("\\", "/");

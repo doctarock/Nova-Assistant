@@ -19,6 +19,7 @@ export function createObserverNativeResponseHelpers(context = {}) {
     buildRecentActivitySummary,
     buildScheduledJobsSummary,
     buildSystemStatusSummary,
+    buildToolConfigPayload,
     buildTodoSummaryLines,
     ensureUniqueOutputPath,
     extractDocumentSearchQuery,
@@ -77,6 +78,98 @@ export function createObserverNativeResponseHelpers(context = {}) {
     toolSendMail,
     upsertMailWatchRule
   } = context;
+
+  function humanizeToolName(name = "") {
+    return String(name || "")
+      .trim()
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function buildToolExample(tool = {}) {
+    const name = String(tool?.name || "").trim();
+    if (!name) return "";
+    const examples = {
+      get_queue_status: "queue status",
+      get_recent_activity: "recent activity",
+      get_completion_summary: "completion summary",
+      get_failure_summary: "failure summary",
+      get_daily_briefing: "daily briefing",
+      get_system_status: "system status",
+      get_scheduled_jobs: "scheduled jobs",
+      get_project_status: "project status",
+      get_project_pipeline: "show project pipeline for <project>",
+      search_documents: "search documents for <topic>",
+      get_document_overview: "document overview",
+      search_skill_library: "search skill library for <capability>",
+      list_installed_skills: "list installed skills",
+      sprint_create: "create a sprint called <name>",
+      sprint_status: "show sprint status for <name>",
+      sprint_advance: "advance sprint <name>",
+      sprint_list: "list active sprints",
+      sprint_ship_checklist: "ship checklist for sprint <name>",
+      sprint_complete: "complete sprint <name>",
+      get_time: "what time is it?",
+      get_date: "what date is it?",
+      get_gpu_status: "GPU status",
+      get_host_system_status: "host system status",
+      get_running_processes: "what is running?",
+      get_weather: "weather today"
+    };
+    if (examples[name]) return examples[name];
+    return humanizeToolName(name);
+  }
+
+  async function buildHelpResponseLines() {
+    const fallbackLines = [
+      "Here is what I can help you with:",
+      "- Status: queue status, recent activity, completion summary, failure summary, daily briefing, system status.",
+      "- Work: queue implementation tasks, inspect files, edit code, validate changes, and report outcomes.",
+      "- Projects: project status, active workspace projects, project pipeline traces.",
+      "- Sprints: create a sprint, list sprints, show sprint status, advance a sprint, get a ship checklist, complete a sprint.",
+      "- Documents: document overview, search documents, read or summarize files.",
+      "- Skills: search skill library, list installed skills, request missing capabilities.",
+      "- Memory: read or update USER.md, MEMORY.md, TODAY.md, and PERSONAL.md.",
+      "- System: scheduled jobs, GPU status, host status, running processes, weather."
+    ];
+    if (typeof buildToolConfigPayload !== "function") {
+      return fallbackLines;
+    }
+    try {
+      const payload = await buildToolConfigPayload();
+      const tools = Array.isArray(payload?.tools) ? payload.tools : [];
+      if (!tools.length) {
+        return fallbackLines;
+      }
+      const approved = tools.filter((tool) => tool?.approved !== false);
+      const intakeTools = approved.filter((tool) => Array.isArray(tool?.scopes) && tool.scopes.includes("intake"));
+      const workerTools = approved.filter((tool) => Array.isArray(tool?.scopes) && tool.scopes.includes("worker"));
+      const pluginTools = approved.filter((tool) => String(tool?.source || "").trim() === "plugin");
+      const sprintTools = approved.filter((tool) => String(tool?.pluginId || "").trim() === "sprint" || String(tool?.name || "").startsWith("sprint_"));
+      const projectTools = approved.filter((tool) => String(tool?.pluginId || "").trim() === "projects" || String(tool?.name || "").startsWith("get_project_"));
+      const visibleExamples = [
+        ...new Set([
+          ...intakeTools
+            .filter((tool) => /^(get_queue_status|get_recent_activity|get_completion_summary|get_failure_summary|get_daily_briefing|get_system_status|get_scheduled_jobs|get_document_overview|search_documents|get_gpu_status|get_host_system_status|get_running_processes|get_weather)$/.test(String(tool.name || "")))
+            .map(buildToolExample),
+          ...projectTools.map(buildToolExample),
+          ...sprintTools.map(buildToolExample)
+        ].filter(Boolean))
+      ].slice(0, 18);
+      const pluginNames = [...new Set(pluginTools.map((tool) => String(tool.pluginName || tool.pluginId || "").trim()).filter(Boolean))].slice(0, 10);
+      return [
+        "Here is what I can help you with:",
+        "- Ask for status: queue status, recent activity, completion summary, failure summary, daily briefing, system status.",
+        "- Give me work: I can queue tasks, inspect files, edit code, validate changes, and report what changed.",
+        visibleExamples.length ? `- Try commands like: ${visibleExamples.join("; ")}.` : "",
+        pluginNames.length ? `- Plugin command groups currently available: ${pluginNames.join(", ")}.` : "",
+        `- Tool catalog: ${approved.length} approved tool${approved.length === 1 ? "" : "s"} available (${intakeTools.length} intake, ${workerTools.length} worker).`,
+        "- You can also ask: \"what tools are available?\", \"show project status\", \"create a sprint called ...\", or \"search documents for ...\"."
+      ].filter(Boolean);
+    } catch {
+      return fallbackLines;
+    }
+  }
 
   async function tryHandleCopyToOutputRequest(message = "") {
     const text = String(message || "").trim();
@@ -395,6 +488,7 @@ export function createObserverNativeResponseHelpers(context = {}) {
     const text = String(message || "").trim();
     const patterns = [
       /^(?:can you\s+|could you\s+|please\s+)?(?:add|put|create|make|append|save|stick|throw|jot down|write down|note down)\s+(.+?)\s+(?:to\s+|in\s+|on\s+|into\s+)?(?:(?:my|the)\s+)?(?:to[\s-]?do|todo|backlog|checklist|task list)\s*(?:list|items?)?[.!?]*$/i,
+      /^(?:can you\s+|could you\s+|please\s+)?(?:add|put|create|make|append|save|stick|throw|jot down|write down|note down)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:to[\s-]?do|todo|backlog|checklist|task list)\s*(?:list\s*)?(?:item|task|entry)?\s*(?:[:\-]\s*|\bcalled\s+|\bnamed\s+|\bfor\s+)(.+)$/i,
       /^(?:to[\s-]?do|todo)\s*[:\-]\s*(.+)$/i,
       /^(?:remind me to|don'?t forget to|note to self:?)\s+(.+)$/i,
       /^(?:can you\s+|could you\s+|please\s+)?(?:add|note|remember)\s+(.+?)\s+as an? (?:action item|task|to[\s-]?do)[.!?]*$/i
@@ -406,6 +500,15 @@ export function createObserverNativeResponseHelpers(context = {}) {
       }
     }
     return "";
+  }
+
+  function isIncompleteTodoAddRequest(message = "") {
+    const lower = String(message || "").trim().toLowerCase();
+    if (!lower || !/\b(add|put|create|make|append|save|jot down|write down|note down)\b/.test(lower)) {
+      return false;
+    }
+    return /\b(?:new\s+)?(?:to[\s-]?do|todo|backlog|checklist|task list)\s*(?:list\s*)?(?:item|task|entry)?\b/.test(lower)
+      && !extractTodoAddRequest(message);
   }
 
   function extractTodoCompleteRequest(message = "") {
@@ -520,6 +623,15 @@ export function createObserverNativeResponseHelpers(context = {}) {
       };
     }
 
+    if (isIncompleteTodoAddRequest(text)) {
+      return {
+        type: "todo_add_missing_text",
+        title: "To do needs text",
+        text: "What should I add to your to do list?",
+        detail: "I heard the add-to-do request, but not the actual item text."
+      };
+    }
+
     if (isTodoSummaryRequest(text)) {
       const lines = await buildTodoSummaryLines();
       return {
@@ -533,10 +645,127 @@ export function createObserverNativeResponseHelpers(context = {}) {
     return null;
   }
 
-  async function tryBuildObserverNativeResponse(message = "") {
+  function getLastAgentText(recentExchanges = []) {
+    const exchanges = Array.isArray(recentExchanges) ? recentExchanges : [];
+    for (let index = exchanges.length - 1; index >= 0; index -= 1) {
+      const exchange = exchanges[index];
+      if (String(exchange?.role || "").trim() === "agent") {
+        return String(exchange.text || "").trim();
+      }
+    }
+    return "";
+  }
+
+  function cleanConversationalFragment(message = "") {
+    return String(message || "")
+      .trim()
+      .replace(/^["']+|["']+$/g, "")
+      .replace(/[.?!]+$/g, "")
+      .trim();
+  }
+
+  function isShortConversationalFragment(message = "") {
+    const text = cleanConversationalFragment(message);
+    if (!text || text.length > 80 || /[?]/.test(text)) {
+      return false;
+    }
+    return text.split(/\s+/).filter(Boolean).length <= 8;
+  }
+
+  async function tryHandleConversationalRequest(message = "", options = {}) {
+    const text = String(message || "").trim();
+    const lower = text.toLowerCase();
+    const lastAgentText = getLastAgentText(options?.recentExchanges).toLowerCase();
+
+    if (/^knock[\s-]?knock[.!?]*$/i.test(text)) {
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: "Who's there?",
+        detail: "Knock-knock joke opener."
+      };
+    }
+
+    if (/\bwho'?s there\??$/i.test(lastAgentText) && isShortConversationalFragment(text)) {
+      const fragment = cleanConversationalFragment(text);
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: `${fragment} who?`,
+        detail: "Knock-knock joke setup."
+      };
+    }
+
+    if (/\bwho\??$/i.test(lastAgentText) && isShortConversationalFragment(text)) {
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: "Ha. Alright, you got me.",
+        detail: "Knock-knock joke punchline."
+      };
+    }
+
+    if (/^(hi|hello|hey|hiya|yo|good morning|good afternoon|good evening)[.!?]*$/i.test(text)) {
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: "Hey. I'm here.",
+        detail: "Greeting handled directly."
+      };
+    }
+
+    if (/^(thanks|thank you|cheers|ta|appreciate it)[.!?]*$/i.test(text)) {
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: "You're welcome.",
+        detail: "Acknowledgement handled directly."
+      };
+    }
+
+    if (/^(?:tell me a joke|say something funny|make me laugh)[.!?]*$/i.test(text)) {
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: "Knock knock.",
+        detail: "Light joke request handled directly."
+      };
+    }
+
+    if (/^(?:how are you|how are you doing|how'?s it going|how are things)[.!?]*$/i.test(lower)) {
+      return {
+        type: "conversation",
+        title: "Conversation",
+        text: "I'm doing okay. A little more conversational now, which feels like progress.",
+        detail: "Casual wellbeing question handled directly."
+      };
+    }
+
+    return null;
+  }
+
+  async function tryBuildObserverNativeResponse(message = "", options = {}) {
     const text = String(message || "").trim();
     if (!text) {
       return null;
+    }
+
+    const conversationalResponse = await tryHandleConversationalRequest(text, options);
+    if (conversationalResponse) {
+      return conversationalResponse;
+    }
+    if (options?.conversationOnly === true) {
+      return null;
+    }
+
+    if (typeof isHelpRequest === "function" && isHelpRequest(text)) {
+      const lines = await buildHelpResponseLines();
+      return {
+        type: "help",
+        title: "What I can do",
+        text: lines.join("\n"),
+        detail: lines.join("\n")
+      };
     }
 
     const copyResponse = await tryHandleCopyToOutputRequest(text);
@@ -772,31 +1001,6 @@ export function createObserverNativeResponseHelpers(context = {}) {
       }
     }
 
-    if (typeof isHelpRequest === "function" && isHelpRequest(text)) {
-      const lines = [
-        "Here is what I can help you with:",
-        "Status & activity: queue status, recent activity, completion summary, failure summary, daily briefing, system status",
-        "Time & date: current time, current date",
-        "Calendar: what's on today, tomorrow, this week, upcoming events, add/remove events",
-        "Email: inbox summary, today's emails, send email, mail status, poll mailbox",
-        "To-do list: show my todo list, add/complete/remove items",
-        "Files & output: output status, read a file, copy to output",
-        "Documents: document overview, search documents",
-        "Projects: project status, workspace projects",
-        "Finance: finance summary, expenses, income",
-        "Scheduled jobs: scheduled jobs, cron status",
-        "Skills: search skill library, install skill, list installed skills",
-        "Memory: read memory files (USER.md, MEMORY.md, TODAY.md, PERSONAL.md)",
-        "You can also give me tasks to work on and I will queue and execute them."
-      ];
-      return {
-        type: "help",
-        title: "What I can do",
-        text: lines[0],
-        detail: lines.join("\n")
-      };
-    }
-
     return null;
   }
 
@@ -809,6 +1013,7 @@ export function createObserverNativeResponseHelpers(context = {}) {
     tryHandleCopyToOutputRequest,
     tryHandleDirectMailRequest,
     tryHandleReadFileRequest,
+    tryHandleConversationalRequest,
     tryHandleSkillLibraryRequest,
     tryHandleStandingMailWatchRequest,
     tryHandleTodoRequest

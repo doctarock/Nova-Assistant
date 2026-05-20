@@ -333,6 +333,13 @@ export async function initializeObserverPluginManager(options = {}) {
       fileName: "session-memory-plugin.js",
       exportName: "createSessionMemoryPlugin",
       factoryArgs: {}
+    },
+    {
+      id: "dreaming",
+      modulePath: pathModule.join(rootDir, "server", "plugins", "dreaming-plugin.js"),
+      fileName: "dreaming-plugin.js",
+      exportName: "createDreamingPlugin",
+      factoryArgs: {}
     }
   ];
 

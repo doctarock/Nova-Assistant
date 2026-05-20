@@ -28,7 +28,6 @@ export async function initializeObserverRuntime(context = {}) {
   await context.loadMailWatchRulesState();
   await context.loadDocumentRulesState();
   await context.loadMailQuarantineLog();
-  await context.migrateLegacyPromptWorkspaceIfNeeded();
   await context.ensurePromptWorkspaceScaffolding();
   if (deferHeavyInitialization) {
     return;

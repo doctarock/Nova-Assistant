@@ -7,6 +7,7 @@ function buildBrainPayload(brain, context) {
     label: brain.label,
     kind: brain.kind,
     model: brain.model,
+    provider: brain.provider || "ollama",
     endpointId: brain.endpointId || "local",
     endpointLabel: brain.endpointLabel || "Local Ollama",
     baseUrl: brain.ollamaBaseUrl || context.localOllamaBaseUrl,
@@ -59,8 +60,8 @@ export function registerRuntimeRoutes(context = {}) {
         context.buildBrainActivitySnapshot(),
         context.getQdrantStatus ? context.getQdrantStatus() : Promise.resolve(null)
       ]);
-      const uniqueEndpointBrains = [...new Map(brains.map((brain) => [brain.ollamaBaseUrl, brain])).values()];
-      const brainSignature = uniqueEndpointBrains.map((b) => b.ollamaBaseUrl).sort().join("|");
+      const uniqueEndpointBrains = [...new Map(brains.map((brain) => [`${brain.provider || "ollama"}:${brain.ollamaBaseUrl}`, brain])).values()];
+      const brainSignature = uniqueEndpointBrains.map((b) => `${b.provider || "ollama"}:${b.ollamaBaseUrl}`).sort().join("|");
       const cacheAge = Date.now() - endpointHealthCache.cachedAt;
       let endpointChecks;
       if (cacheAge < ENDPOINT_HEALTH_TTL_MS && endpointHealthCache.brainSignature === brainSignature && endpointHealthCache.results.length) {
@@ -69,7 +70,9 @@ export function registerRuntimeRoutes(context = {}) {
         endpointChecks = await Promise.all(
           uniqueEndpointBrains.map(async (brain) => ({
             brainIds: brains.filter((entry) => entry.ollamaBaseUrl === brain.ollamaBaseUrl).map((entry) => entry.id),
-            ...(await context.inspectOllamaEndpoint(brain.ollamaBaseUrl))
+            ...(await (context.inspectProviderEndpoint
+              ? context.inspectProviderEndpoint(brain)
+              : context.inspectOllamaEndpoint(brain.ollamaBaseUrl)))
           }))
         );
         endpointHealthCache = { results: endpointChecks, cachedAt: Date.now(), brainSignature };
@@ -80,7 +83,7 @@ export function registerRuntimeRoutes(context = {}) {
         || brains[0];
 
       res.json({
-        ok: ollama.running,
+        ok: ollama.running || endpointChecks.some((entry) => entry.running),
         gateway: {
           name: "local-runtime",
           exists: true,
@@ -91,6 +94,7 @@ export function registerRuntimeRoutes(context = {}) {
           label: intakeBrain?.label || "Intake",
           model: intakeBrain?.model || "",
           endpointId: intakeBrain?.endpointId || "local",
+          provider: intakeBrain?.provider || "ollama",
           baseUrl: intakeBrain?.ollamaBaseUrl || context.localOllamaBaseUrl,
           running: true
         },
@@ -98,6 +102,7 @@ export function registerRuntimeRoutes(context = {}) {
           label: workerBrain?.label || "Worker",
           model: workerBrain?.model || "",
           endpointId: workerBrain?.endpointId || "local",
+          provider: workerBrain?.provider || "ollama",
           baseUrl: workerBrain?.ollamaBaseUrl || context.localOllamaBaseUrl,
           running: endpointChecks.some(
             (entry) => entry.baseUrl === (workerBrain?.ollamaBaseUrl || context.localOllamaBaseUrl) && entry.running

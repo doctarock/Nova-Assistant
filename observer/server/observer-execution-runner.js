@@ -50,6 +50,7 @@ export function createObserverExecutionRunner(context = {}) {
     buildToolExecutionBatches,
     sanitizeSkillSlug,
     appendRepairLesson,
+    appendSuccessLesson = async () => null,
     appendHookTrace = async () => null,
     appendProviderHistory = async () => null,
     appendToolStep = async () => null,
@@ -98,6 +99,7 @@ export function createObserverExecutionRunner(context = {}) {
     const normalizedTaskContext = taskContext && typeof taskContext === "object"
       ? taskContext
       : {};
+    const taskInternalJobType = String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim();
     const ollamaLeaseOwnerId = normalizedTaskContext?.taskId
       ? `task:${String(normalizedTaskContext.taskId).trim()}`
       : `session:${String(sessionId || "Main").trim() || "Main"}:worker`;
@@ -109,6 +111,8 @@ export function createObserverExecutionRunner(context = {}) {
     let invalidConcreteFinalCount = 0;
     let echoedToolResultsCount = 0;
     let repairContext = null;
+    let repairAppliedStep = -1;
+    let repairAppliedSignature = null;
     const urlsUsed = [];
     const inspectFirstTarget = extractTaskDirectiveValue(message, "Inspect first:");
     const expectedFirstMove = extractTaskDirectiveValue(message, "Expected first move:");
@@ -129,7 +133,7 @@ export function createObserverExecutionRunner(context = {}) {
       preparedAttachmentsFiles: preparedAttachments?.files || [],
       visionImageCount: visionImages.length,
       runtimeNotesExtra,
-      internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim(),
+      internalJobType: taskInternalJobType,
       taskId: String(normalizedTaskContext?.taskId || "").trim()
     });
     const emitExecutionEvent = async (hookName = "", payload = {}) => {
@@ -150,7 +154,7 @@ export function createObserverExecutionRunner(context = {}) {
       },
       internetEnabled: internetEnabled === true,
       selectedMountIds: Array.isArray(selectedMountIds) ? selectedMountIds : [],
-      internalJobType: String(normalizedTaskContext?.taskMeta?.internalJobType || normalizedTaskContext?.internalJobType || "").trim(),
+      internalJobType: taskInternalJobType,
       messagePreview: compactTaskText(String(message || "").trim(), 220)
     });
 
@@ -280,7 +284,7 @@ export function createObserverExecutionRunner(context = {}) {
               durationMs: Date.now() - startedAt,
               agentMeta: {
                 sessionId,
-                provider: "ollama",
+                provider: String(brain?.provider || "ollama").trim() || "ollama",
                 model: brain.model
               }
             }
@@ -291,7 +295,8 @@ export function createObserverExecutionRunner(context = {}) {
       };
     }
 
-    for (let step = 0; step < 8; step += 1) {
+    const workerMaxSteps = Math.max(4, Number(observerConfig?.workerMaxSteps || 0) || 8);
+    for (let step = 0; step < workerMaxSteps; step += 1) {
       if (abortSignal?.aborted) {
         return {
           ok: false,
@@ -319,6 +324,8 @@ export function createObserverExecutionRunner(context = {}) {
         {
           signal: abortSignal,
           baseUrl: brain.ollamaBaseUrl,
+          provider: brain.provider,
+          apiKeyEnv: brain.apiKeyEnv,
           images: visionImages,
           brainId: brain.id,
           leaseOwnerId: ollamaLeaseOwnerId,
@@ -326,7 +333,7 @@ export function createObserverExecutionRunner(context = {}) {
         }
       );
       await appendProviderHistory(String(normalizedTaskContext?.taskId || "").trim(), {
-        provider: "ollama",
+        provider: String(brain?.provider || "ollama").trim() || "ollama",
         model: String(brain?.model || "").trim(),
         brainId: String(brain?.id || "").trim(),
         step: step + 1,
@@ -337,7 +344,8 @@ export function createObserverExecutionRunner(context = {}) {
         providerState: {
           code: result.code,
           timedOut: result.timedOut === true,
-          baseUrl: String(brain?.ollamaBaseUrl || "").trim()
+          baseUrl: String(brain?.ollamaBaseUrl || "").trim(),
+          provider: String(brain?.provider || "ollama").trim() || "ollama"
         }
       }).catch(() => {});
       if (!result.ok) {
@@ -378,6 +386,8 @@ export function createObserverExecutionRunner(context = {}) {
           "Use one of these exact envelopes: {\"assistant_message\":\"...\",\"tool_calls\":[...],\"final\":false} or {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"final\":true}.",
           {
             baseUrl: brain.ollamaBaseUrl,
+            provider: brain.provider,
+            apiKeyEnv: brain.apiKeyEnv,
             brainId: brain.id,
             leaseOwnerId: ollamaLeaseOwnerId,
             leaseWaitMs: 2500
@@ -401,6 +411,8 @@ export function createObserverExecutionRunner(context = {}) {
             parseError: retryParseError || initialParseError,
             schemaHint: "Use one of these exact envelopes: {\"assistant_message\":\"...\",\"tool_calls\":[...],\"final\":false} or {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"final\":true}.",
             baseUrl: brain.ollamaBaseUrl,
+            provider: brain.provider,
+            apiKeyEnv: brain.apiKeyEnv,
             leaseOwnerId: ollamaLeaseOwnerId
           });
           if (debugRetried.ok) {
@@ -551,8 +563,8 @@ export function createObserverExecutionRunner(context = {}) {
           const previous = workspaceFilesBeforeMap.get(file.fullPath);
           return !previous || previous.modifiedAt !== file.modifiedAt || previous.size !== file.size;
         });
-        const isProjectCycleTask = /\/project-todo\.md\b/i.test(String(message || ""))
-          || /\bthis is a focused project work package\b/i.test(String(message || ""));
+        const isProjectCycleTask = taskInternalJobType === "project_cycle"
+          || (!taskInternalJobType && typeof isProjectCycleMessage === "function" && isProjectCycleMessage(message));
         const objectiveText = extractTaskDirectiveValue(message, "Objective:");
         const minimumConcreteTargets = getProjectNoChangeMinimumTargets();
         const projectCyclePolicy = buildProjectCycleCompletionPolicy(message, {
@@ -644,7 +656,7 @@ export function createObserverExecutionRunner(context = {}) {
                   durationMs: Date.now() - startedAt,
                   agentMeta: {
                     sessionId,
-                    provider: "ollama",
+                    provider: String(brain?.provider || "ollama").trim() || "ollama",
                     model: brain.model
                   }
                 }
@@ -867,7 +879,7 @@ export function createObserverExecutionRunner(context = {}) {
           }
           continue;
         }
-        if (requiresConcreteOutcome && !usedWriteTool && !changedOutputFiles.length && !changedWorkspaceFiles.length && !hasNoChangeConclusion) {
+        if (preset !== "internal-recreation" && requiresConcreteOutcome && !usedWriteTool && !changedOutputFiles.length && !changedWorkspaceFiles.length && !hasNoChangeConclusion) {
           const retry = rejectOrRetryInvalidConcreteFinal(
             "worker claimed completion without changing files, producing artifacts, or proving a no-change conclusion",
             finalText,
@@ -884,8 +896,20 @@ export function createObserverExecutionRunner(context = {}) {
         }
         invalidConcreteFinalCount = 0;
         toolLoopDiagnostics.summary = buildToolLoopSummaryText(toolLoopDiagnostics);
+        if (repairAppliedStep >= 0) {
+          toolLoopDiagnostics.repairHeld = true;
+        }
         if (repairContext && typeof appendRepairLesson === "function") {
-          appendRepairLesson(repairContext).catch(() => {});
+          appendRepairLesson(repairContext).catch(() => { toolLoopDiagnostics.repairLessonFailed = true; });
+        }
+        if (changedOutputFiles.length > 0 || changedWorkspaceFiles.length > 0) {
+          appendSuccessLesson({
+            taskMessage: message,
+            brainId: String(brain?.id || "").trim(),
+            specialty: String(brain?.specialty || "").trim(),
+            toolsUsed: executedTools.slice(0, 8),
+            changedFiles: changedOutputFiles.length + changedWorkspaceFiles.length
+          }).catch(() => {});
         }
         // Notify plugins that a worker execution completed successfully
         emitExecutionEvent("worker:execution:completed", {
@@ -930,7 +954,7 @@ export function createObserverExecutionRunner(context = {}) {
                 durationMs: Date.now() - startedAt,
                 agentMeta: {
                   sessionId,
-                  provider: "ollama",
+                  provider: String(brain?.provider || "ollama").trim() || "ollama",
                   model: brain.model
                 }
               }
@@ -957,6 +981,8 @@ export function createObserverExecutionRunner(context = {}) {
           executedTools,
           inspectedTargets: [...inspectedTargets],
           baseUrl: brain.ollamaBaseUrl,
+          provider: brain.provider,
+          apiKeyEnv: brain.apiKeyEnv,
           leaseOwnerId: ollamaLeaseOwnerId
         });
         if (!replanned.ok || !replanned.decision) {
@@ -1017,6 +1043,8 @@ export function createObserverExecutionRunner(context = {}) {
           repeatedCalls: repeatedCallNames,
           repairNote: String(replanned.decision?.assistant_message || "").slice(0, 200).trim()
         };
+        repairAppliedStep = step;
+        repairAppliedSignature = replannedSignature;
         const containerLessonsPath = OBSERVER_CONTAINER_WORKSPACE_ROOT
           ? `${OBSERVER_CONTAINER_WORKSPACE_ROOT}/prompt-files/LOOP-LESSONS.md`
           : "";
@@ -1031,6 +1059,9 @@ export function createObserverExecutionRunner(context = {}) {
         });
       }
       if (repeatedSignatureCount >= 3) {
+        const repairFailedNote = repairAppliedStep >= 0 && repairAppliedSignature && repairAppliedSignature !== toolCallSignature
+          ? "; loop repair was applied but did not hold"
+          : "";
         return {
           ok: false,
           code: 1,
@@ -1044,7 +1075,7 @@ export function createObserverExecutionRunner(context = {}) {
           outputFiles: [],
           parsed: null,
           stdout: "",
-          stderr: `worker repeated the same tool plan without progress (${repeatedSignatureCount} times)`,
+          stderr: `worker repeated the same tool plan without progress (${repeatedSignatureCount} times)${repairFailedNote}`,
           malformedResponse: compactTaskText(toolCallSignature, 4000)
         };
       }

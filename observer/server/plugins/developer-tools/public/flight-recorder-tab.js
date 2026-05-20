@@ -1,7 +1,6 @@
 let flightRecorderRoot = null;
 let pluginAdminFetchRef = null;
 let currentTaskId = "";
-let currentPacket = null;
 
 function h(value = "") {
   return String(value || "")
@@ -33,7 +32,7 @@ function renderStatus(root, message = "", isError = false) {
 function formatTs(ts) {
   if (!ts) return "-";
   try {
-    return new Date(Number(ts)).toLocaleTimeString();
+    return new Date(Number(ts)).toLocaleString();
   } catch {
     return String(ts);
   }
@@ -212,12 +211,15 @@ async function handleRollback(transactionId, root) {
 async function loadPacket(taskId, root) {
   if (!taskId || !pluginAdminFetchRef) return;
   renderStatus(root, "Loading...");
+  const { packetEl, validateBtn } = getElements(root);
+  if (packetEl) packetEl.innerHTML = "";
+  if (validateBtn) validateBtn.disabled = true;
   try {
     const result = await pluginAdminFetchRef(`/api/plugins/developer-tools/task-debug?taskId=${encodeURIComponent(taskId)}&limit=80`);
     const data = await result.json();
-    currentPacket = data;
     renderPacket(data, root);
     renderStatus(root, data.ok ? `Loaded task ${taskId}` : `Error: ${data.error || "unknown"}`);
+    if (validateBtn && data.ok) validateBtn.disabled = false;
   } catch (error) {
     renderStatus(root, `Load error: ${error.message}`, true);
   }
@@ -269,8 +271,8 @@ function ensureMarkup(root = flightRecorderRoot) {
       </div>
       <div class="fr-controls">
         <input id="frTaskIdInput" type="text" placeholder="Task ID (e.g. task-...)" />
-        <button id="frLoadBtn">Load</button>
-        <button id="frValidateBtn">Validate History</button>
+        <button id="frLoadBtn" disabled>Load</button>
+        <button id="frValidateBtn" disabled>Validate History</button>
       </div>
       <div id="frStatus" class="fr-status"></div>
       <div id="frPacket"></div>
@@ -280,6 +282,8 @@ function ensureMarkup(root = flightRecorderRoot) {
   if (taskIdInput) {
     taskIdInput.addEventListener("input", () => {
       currentTaskId = taskIdInput.value.trim();
+      if (loadBtn) loadBtn.disabled = !currentTaskId;
+      if (!currentTaskId && validateBtn) validateBtn.disabled = true;
     });
     taskIdInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") loadBtn?.click();
@@ -298,6 +302,9 @@ function ensureMarkup(root = flightRecorderRoot) {
 export async function mountPluginTab(context = {}) {
   const root = context?.root;
   if (!(root instanceof HTMLElement)) return;
+  if (flightRecorderRoot !== root) {
+    currentTaskId = "";
+  }
   flightRecorderRoot = root;
   pluginAdminFetchRef = context?.pluginAdminFetch || null;
   ensureMarkup(root);

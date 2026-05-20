@@ -7,7 +7,7 @@ const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 //   node server.js | npx pino-pretty
 export const logger = pino({
   level: LOG_LEVEL,
-  base: { pid: process.pid, service: "openclaw-observer" },
+  base: { pid: process.pid, service: "nova-observer" },
   timestamp: pino.stdTimeFunctions.isoTime,
   formatters: {
     level: (label) => ({ level: label })

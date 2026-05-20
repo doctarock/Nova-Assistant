@@ -455,10 +455,10 @@ function updateVoiceUi() {
     const remainingMs = Math.max(0, pendingVoiceQuestionExpiresAt - Date.now());
     const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
     const waitingPrompt = pendingVoiceQuestionExpiresAt > Date.now()
-      ? `Question waiting. Say <strong>${escapeHtml(getBotName())}</strong> within <strong>${remainingSeconds}s</strong> to answer by voice.`
-      : `Question waiting. Say <strong>${escapeHtml(getBotName())}</strong> to answer by voice.`;
+      ? `Question waiting. I will listen automatically after Nova asks it. Answer within <strong>${remainingSeconds}s</strong>.`
+      : "Question waiting. I will listen automatically after Nova asks it.";
     setVoiceStatus(waitingPrompt);
-    setVoiceMeta(`Question: ${pendingVoiceQuestionText || "Nova is waiting for your direction."} | Say "skip question" to remove it.${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
+    setVoiceMeta(`Question: ${pendingVoiceQuestionText || "Nova is waiting for your direction."} | Say "skip question" to remove it, or use the stop phrase when finished.${speakerMeta}${voiceLastError ? ` | Last error: ${voiceLastError}` : ""}`);
     window.dispatchEvent(new CustomEvent("observer:voice-state", {
       detail: { mode: visualMode, listeningEnabled: voiceListeningEnabled, wakeActive: voiceWakeActive, questionWaiting: true, at: Date.now() }
     }));
@@ -572,7 +572,7 @@ function timeoutPendingVoiceQuestionWindow() {
     return;
   }
   clearPendingVoiceQuestionWindow({ preserveStatus: true, preserveQuestionTime: true, preserveTask: true });
-  setVoiceStatus(`Voice answer window timed out. Say <strong>${escapeHtml(getBotName())}</strong> to answer by voice, or use the Questions section to answer manually.`);
+  setVoiceStatus("Voice answer window timed out. Replay the question or use the Questions section to answer manually.");
   setVoiceMeta("The follow-up question is still waiting in the queue.");
 }
 
@@ -1233,6 +1233,39 @@ function getVoiceStopDetectionText() {
   );
 }
 
+let lastPresenceTranscriptText = "";
+let lastPresenceTranscriptAt = 0;
+
+function submitPresenceVoiceTranscript(detail = {}) {
+  const text = String(detail?.text || "").trim();
+  if (!text || detail?.isFinal !== true || detail?.wakeActive === true) {
+    return;
+  }
+  const normalized = text.toLowerCase();
+  const now = Date.now();
+  if (normalized === lastPresenceTranscriptText && now - lastPresenceTranscriptAt < 30000) {
+    return;
+  }
+  lastPresenceTranscriptText = normalized;
+  lastPresenceTranscriptAt = now;
+  fetch("/api/presence/observe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text,
+      isFinal: true,
+      mode: detail.mode || "passive",
+      source: "voice",
+      sourceIdentity: detail.sourceIdentity || null,
+      observedAt: Number(detail.at || 0) || now,
+      audioAvailable: true,
+      videoAvailable: false
+    })
+  }).catch(() => {
+    // Presence is optional; voice capture should not depend on it.
+  });
+}
+
 function handleVoiceTranscript(text, isFinal) {
   if (voiceStopRequested || Date.now() < voiceSubmissionCooldownUntil) {
     return;
@@ -1241,6 +1274,16 @@ function handleVoiceTranscript(text, isFinal) {
   if (!transcript) {
     return;
   }
+  const transcriptDetail = {
+    text: transcript,
+    isFinal: isFinal === true,
+    mode: voiceWakeActive ? "listening" : "passive",
+    wakeActive: voiceWakeActive,
+    sourceIdentity: hasConfiguredVoiceTrustProfiles() ? resolveCurrentVoiceSourceIdentity() : null,
+    at: Date.now()
+  };
+  window.dispatchEvent(new CustomEvent("observer:voice-transcript", { detail: transcriptDetail }));
+  submitPresenceVoiceTranscript(transcriptDetail);
   voiceLastTranscript = transcript;
   const normalizedTranscript = normalizeVoiceText(transcript);
   const wakePhrase = normalizeVoiceText(getWakePhrase());

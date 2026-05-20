@@ -20,8 +20,40 @@ export function createObserverEscalationReview(context = {}) {
     listAvailableBrains,
     markTaskCriticalFailure,
     recordTaskReshapeReview,
-    runOllamaJsonGenerate
+    runOllamaJsonGenerate,
+    appendRepairLesson = async () => null
   } = context;
+
+  function determineHeuristicEscalationDecision({ classification, capabilityMismatchSuspected, availableWorkers, attemptedBrains }) {
+    const untried = availableWorkers.filter((id) => !attemptedBrains.includes(id));
+    if (capabilityMismatchSuspected && untried.length > 0) {
+      return { action: "retry", requestedBrainId: untried[0], reason: "Capability mismatch detected; routing to untried worker brain.", message: "", subTasks: [] };
+    }
+    if (classification === "tool_loop" || classification === "repeated_tool_loop") {
+      if (untried.length > 0) {
+        return { action: "retry", requestedBrainId: untried[0], reason: "Tool loop failure; routing to untried worker to break the pattern.", message: "", subTasks: [] };
+      }
+      return { action: "close", requestedBrainId: "", reason: "Tool loop failure with no untried workers remaining.", message: "", subTasks: [] };
+    }
+    if ((classification === "timed_out" || classification === "model_timeout") && untried.length > 0) {
+      return { action: "retry", requestedBrainId: untried[0], reason: "Timeout failure; routing to untried worker.", message: "", subTasks: [] };
+    }
+    if (classification === "no_idle_worker" || classification === "worker_unavailable") {
+      return { action: "close", requestedBrainId: "", reason: "No worker available at escalation time.", message: "", subTasks: [] };
+    }
+    return null;
+  }
+
+  function buildPriorAttemptDiagnosticsNote(sourceTask) {
+    if (!sourceTask) return "";
+    const parts = [];
+    const diagSummary = compactTaskText(String(sourceTask.toolLoopDiagnostics?.summary || "").trim(), 300);
+    if (diagSummary) parts.push(`Prior attempt diagnostics: ${diagSummary}`);
+    const malformed = compactTaskText(String(sourceTask.malformedResponse || "").trim(), 200);
+    if (malformed && !diagSummary) parts.push(`Prior attempt stuck on: ${malformed}`);
+    return parts.length ? `\n\n${parts.join("\n")}` : "";
+  }
+
 async function executeEscalationReviewJob(task) {
   const routing = getRoutingConfig();
   const plannerBrain = await choosePlannerRepairBrain(
@@ -41,42 +73,54 @@ async function executeEscalationReviewJob(task) {
   const availableWorkers = (await listAvailableBrains())
     .filter((brain) => brain.kind === "worker" && brain.toolCapable)
     .map((brain) => brain.id);
-  const escalationPrompt = [
-    "You are Nova's escalation planner.",
-    "Return JSON only.",
-    "Decide what to do after all direct worker attempts failed.",
-    "Use exactly this schema:",
-    "{\"action\":\"retry|split|clarify|close\",\"reason\":\"...\",\"requestedBrainId\":\"...\",\"message\":\"...\",\"subTasks\":[\"...\"]}",
-    `Original queued message: ${String(task.message || "").trim()}`,
-    `Escalation notes: ${String(task.notes || "").trim()}`,
-    `Source task id: ${sourceTaskId || "none"}`,
-    `Source task summary: ${compactTaskText(String(sourceTask?.resultSummary || sourceTask?.reviewSummary || sourceTask?.workerSummary || ""), 300) || "none"}`,
-    `Failure classification: ${String(task.failureClassification || sourceTask?.failureClassification || "").trim() || "unknown"}`,
-    `Capability mismatch suspected: ${task.capabilityMismatchSuspected === true || sourceTask?.capabilityMismatchSuspected === true ? "yes" : "no"}`,
-    `Brains already attempted: ${attemptedBrains.length ? attemptedBrains.join(", ") : "none"}`,
-    `Available worker brains: ${availableWorkers.join(", ") || "none"}`,
-    "Prefer retry only if you can materially improve the brief or pick an untried worker.",
-    "If capability mismatch is suspected, prefer an untried worker that is a better execution fit over repeating the same route.",
-    "Use split when the task is too broad and should become smaller concrete jobs.",
-    "Use clarify when the user must answer something before progress is possible.",
-    "Use close when no safe next step exists."
-  ].join("\n");
+  const failureClassification = String(task.failureClassification || sourceTask?.failureClassification || "").trim().toLowerCase();
+  const capabilityMismatchSuspected = task.capabilityMismatchSuspected === true || sourceTask?.capabilityMismatchSuspected === true;
+  const heuristicDecision = determineHeuristicEscalationDecision({
+    classification: failureClassification,
+    capabilityMismatchSuspected,
+    availableWorkers,
+    attemptedBrains
+  });
 
   let decision = null;
-  try {
-    const result = await runOllamaJsonGenerate(plannerBrain.model, escalationPrompt, {
-      timeoutMs: 20000,
-      keepAlive: MODEL_KEEPALIVE,
-      baseUrl: plannerBrain.ollamaBaseUrl,
-      brainId: plannerBrain.id,
-      leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `escalation:${String(task?.sessionId || "Main").trim() || "Main"}`,
-      leaseWaitMs: 2500
-    });
-    if (result.ok) {
-      decision = extractJsonObject(result.text);
+  if (!heuristicDecision) {
+    const escalationPrompt = [
+      "You are Nova's escalation planner.",
+      "Return JSON only.",
+      "Decide what to do after all direct worker attempts failed.",
+      "Use exactly this schema:",
+      "{\"action\":\"retry|split|clarify|close\",\"reason\":\"...\",\"requestedBrainId\":\"...\",\"message\":\"...\",\"subTasks\":[\"...\"]}",
+      `Original queued message: ${String(task.message || "").trim()}`,
+      `Escalation notes: ${String(task.notes || "").trim()}`,
+      `Source task id: ${sourceTaskId || "none"}`,
+      `Source task summary: ${compactTaskText(String(sourceTask?.resultSummary || sourceTask?.reviewSummary || sourceTask?.workerSummary || ""), 300) || "none"}`,
+      `Failure classification: ${failureClassification || "unknown"}`,
+      `Capability mismatch suspected: ${capabilityMismatchSuspected ? "yes" : "no"}`,
+      `Brains already attempted: ${attemptedBrains.length ? attemptedBrains.join(", ") : "none"}`,
+      `Available worker brains: ${availableWorkers.join(", ") || "none"}`,
+      "Prefer retry only if you can materially improve the brief or pick an untried worker.",
+      "If capability mismatch is suspected, prefer an untried worker that is a better execution fit over repeating the same route.",
+      "Use split when the task is too broad and should become smaller concrete jobs.",
+      "Use clarify when the user must answer something before progress is possible.",
+      "Use close when no safe next step exists."
+    ].join("\n");
+    try {
+      const result = await runOllamaJsonGenerate(plannerBrain.model, escalationPrompt, {
+        timeoutMs: 20000,
+        keepAlive: MODEL_KEEPALIVE,
+        baseUrl: plannerBrain.ollamaBaseUrl,
+        brainId: plannerBrain.id,
+        leaseOwnerId: task?.id ? `task:${String(task.id).trim()}` : `escalation:${String(task?.sessionId || "Main").trim() || "Main"}`,
+        leaseWaitMs: 2500
+      });
+      if (result.ok) {
+        decision = extractJsonObject(result.text);
+      }
+    } catch {
+      decision = null;
     }
-  } catch {
-    decision = null;
+  } else {
+    decision = heuristicDecision;
   }
 
   const action = String(decision?.action || "").trim().toLowerCase();
@@ -88,7 +132,7 @@ async function executeEscalationReviewJob(task) {
     task,
     sourceTask,
     attemptedBrains,
-    classification: String(task.failureClassification || sourceTask?.failureClassification || "").trim(),
+    classification: failureClassification,
     fallback: "Escalation planner reviewed the failed worker chain."
   });
   const retryMessage = compactTaskText(String(decision?.message || "").trim(), 500);
@@ -166,11 +210,14 @@ async function executeEscalationReviewJob(task) {
       classification: String(anchorTask?.failureClassification || "").trim(),
       willResubmit: true
     });
-    for (const subTask of subTasks) {
+    const splitGroupId = `split-${String(task.id || "").trim()}-${Date.now()}`;
+    let previousSubTaskId = null;
+    for (let splitIndex = 0; splitIndex < subTasks.length; splitIndex += 1) {
+      const subTask = subTasks[splitIndex];
       const splitMessage = String(task.internalJobType || "").trim() === "project_cycle"
         ? buildProjectCycleFollowUpMessage(task, { focusOverride: subTask, retryNote: reason })
         : [String(task.message || "").trim(), "", `Focused split objective: ${subTask}`, reason].filter(Boolean).join("\n");
-      await createQueuedTask({
+      const createdSubTask = await createQueuedTask({
         message: splitMessage,
         sessionId: task.sessionId || "task-escalation",
         requestedBrainId: splitBrainId,
@@ -186,12 +233,16 @@ async function executeEscalationReviewJob(task) {
           escalationSourceTaskId: sourceTaskId || undefined,
           reshapeIssueKey: String(reshapeRecord?.issueKey || "").trim() || undefined,
           reshapeSourcePhase: "escalation_review",
+          splitGroupId,
+          splitOrderIndex: splitIndex,
+          dependsOnTaskIds: previousSubTaskId ? [previousSubTaskId] : undefined,
           projectWorkFocus: String(task.internalJobType || "").trim() === "project_cycle" ? compactTaskText(subTask, 220) : undefined,
           projectWorkKey: String(task.internalJobType || "").trim() === "project_cycle"
             ? buildEscalationSplitProjectWorkKey(task, subTask)
             : undefined
         })
       });
+      previousSubTaskId = createdSubTask?.id ? String(createdSubTask.id).trim() : null;
     }
     return {
       ok: true,
@@ -270,10 +321,11 @@ async function executeEscalationReviewJob(task) {
       classification: String(anchorTask?.failureClassification || "").trim(),
       willResubmit: true
     });
+    const priorDiagnosticsNote = buildPriorAttemptDiagnosticsNote(sourceTask);
     await createQueuedTask({
       message: String(task.internalJobType || "").trim() === "project_cycle"
         ? buildProjectCycleFollowUpMessage(task, { retryNote: retryMessage || reason })
-        : [String(task.message || "").trim(), "", compactTaskText(retryMessage || reason, 320)].filter(Boolean).join("\n"),
+        : [String(task.message || "").trim(), "", compactTaskText(retryMessage || reason, 320), priorDiagnosticsNote].filter(Boolean).join("\n"),
       sessionId: task.sessionId || "task-escalation",
       requestedBrainId: nextBrainId,
       intakeBrainId: task.intakeBrainId || "bitnet",
@@ -288,10 +340,15 @@ async function executeEscalationReviewJob(task) {
         escalationSourceTaskId: sourceTaskId || undefined,
         reshapeIssueKey: String(reshapeRecord?.issueKey || "").trim() || undefined,
         reshapeSourcePhase: "escalation_review",
-        specialistAttemptedBrainIds: [...new Set(attemptedBrains)],
+        specialistAttemptedBrainIds: [...new Set([...attemptedBrains, nextBrainId].filter(Boolean))],
         escalationDepth: Number(task.escalationDepth || 0) + 1
       })
     });
+    appendRepairLesson({
+      taskMessage: compactTaskText(String(task.message || "").trim(), 200),
+      repeatedCalls: `escalation:${failureClassification || "unknown"}`,
+      repairNote: `${action === "close" ? "close_override_" : ""}retry:${nextBrainId}`
+    }).catch(() => {});
     return {
       ok: true,
       code: 0,
@@ -345,6 +402,11 @@ async function executeEscalationReviewJob(task) {
     classification: String(anchorTask?.failureClassification || "").trim(),
     willResubmit: false
   });
+  appendRepairLesson({
+    taskMessage: compactTaskText(String(task.message || "").trim(), 200),
+    repeatedCalls: `escalation:${failureClassification || "unknown"}`,
+    repairNote: `close:no_safe_next_step`
+  }).catch(() => {});
 
   return {
     ok: true,

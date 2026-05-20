@@ -20,6 +20,7 @@ export function createObserverPeriodicJobs(context = {}) {
     getMailWatchRulesState,
     isDefinitelyBadMail,
     isDefinitelyGoodMail,
+    getWaitingQuestionBacklogCount,
     listAllTasks,
     listTasksByFolder,
     moveAgentMail,
@@ -190,6 +191,12 @@ async function ensureQuestionMaintenanceJob() {
     return latestHistorical;
   }
   const brain = await chooseQuestionMaintenanceBrain();
+  const backlogCount = await getWaitingQuestionBacklogCount();
+  const adaptiveEveryMs = backlogCount > 5
+    ? 5 * 60 * 1000
+    : backlogCount === 0
+      ? 30 * 60 * 1000
+      : QUESTION_MAINTENANCE_INTERVAL_MS;
   return createQueuedTask({
     message: "Prompt memory question maintenance: ask one focused question, fill out USER.md, MEMORY.md, and PERSONAL.md when answers exist, and deepen those documents when core sections are already filled.",
     sessionId: "scheduler",
@@ -206,9 +213,9 @@ async function ensureQuestionMaintenanceJob() {
         name: "Prompt memory question maintenance",
         seriesId,
         every: "15m",
-        everyMs: QUESTION_MAINTENANCE_INTERVAL_MS
+        everyMs: adaptiveEveryMs
       },
-      notBeforeAt: Date.now() + QUESTION_MAINTENANCE_INTERVAL_MS,
+      notBeforeAt: Date.now() + adaptiveEveryMs,
       appliedClarificationCount: 0,
       questionCycleIndex: 0
     }
@@ -508,6 +515,18 @@ async function runMailWatchRulesNow({ source = "mail_grab", ruleIds = [] } = {})
         checkedRuleCount: 0
       }
     );
+  }
+
+  const allRules = Array.isArray(getMailWatchRulesState()?.rules) ? getMailWatchRulesState().rules : [];
+  const disabledWithOrphanedState = allRules.filter((rule) =>
+    rule
+    && rule.enabled === false
+    && String(rule.id || "").trim()
+    && Array.isArray(rule.pendingUnsureMessageIds)
+    && rule.pendingUnsureMessageIds.length > 0
+  );
+  for (const rule of disabledWithOrphanedState) {
+    await upsertMailWatchRule({ ...rule, pendingUnsureMessageIds: [] });
   }
 
   const ruleResults = [];

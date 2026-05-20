@@ -3,6 +3,15 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+const PLUGIN_DATA_WRITE_RETRY_CODES = new Set([
+  "EBUSY",
+  "EMFILE",
+  "ENFILE",
+  "EPERM",
+  "EACCES",
+  "UNKNOWN"
+]);
+
 function normalizePluginId(value = "") {
   return String(value || "")
     .trim()
@@ -146,6 +155,7 @@ export function createNovaPluginManager(context = {}) {
   const uiTabs = new Map();
   const uiNovaTabs = new Map();
   const uiSecretsTabs = new Map();
+  const uiSystemTabs = new Map();
   const regressionSuites = new Map();
   const internalRegressionRunners = new Map();
   const pluginRoutes = new Map();
@@ -660,8 +670,64 @@ export function createNovaPluginManager(context = {}) {
       return value;
     }
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    return value;
+    const content = `${JSON.stringify(value, null, 2)}\n`;
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    const retryDelay = (attempt) => new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1000, 40 * Math.pow(2, attempt)));
+    });
+    const shouldRetry = (error) => PLUGIN_DATA_WRITE_RETRY_CODES.has(String(error?.code || "").trim().toUpperCase());
+    const writeFileWithRetries = async (targetPath, targetContent) => {
+      let lastWriteError = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          await fs.writeFile(targetPath, targetContent, "utf8");
+          return;
+        } catch (error) {
+          lastWriteError = error;
+          if (!shouldRetry(error) || attempt >= 5) {
+            break;
+          }
+          await retryDelay(attempt);
+        }
+      }
+      throw lastWriteError;
+    };
+    let lastError = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await writeFileWithRetries(tempPath, content);
+        if (typeof fs.rename === "function") {
+          await fs.rename(tempPath, filePath);
+        } else {
+          await writeFileWithRetries(filePath, content);
+          if (typeof fs.rm === "function") {
+            await fs.rm(tempPath, { force: true }).catch(() => {});
+          }
+        }
+        return value;
+      } catch (error) {
+        lastError = error;
+        if (shouldRetry(error)) {
+          try {
+            await writeFileWithRetries(filePath, content);
+            if (typeof fs.rm === "function") {
+              await fs.rm(tempPath, { force: true }).catch(() => {});
+            }
+            return value;
+          } catch (fallbackError) {
+            lastError = fallbackError;
+          }
+        }
+        if (typeof fs.rm === "function") {
+          await fs.rm(tempPath, { force: true }).catch(() => {});
+        }
+        if (!shouldRetry(lastError) || attempt >= 4) {
+          break;
+        }
+        await retryDelay(attempt);
+      }
+    }
+    throw lastError;
   }
 
   async function updatePluginDataJson(pluginId = "", key = "", updater = null, fallback = null) {
@@ -1211,6 +1277,14 @@ export function createNovaPluginManager(context = {}) {
     return (uiSecretsTabs.get(normalizedPluginId) || []).slice();
   }
 
+  function listPluginUiSystemTabs(pluginId = "") {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!normalizedPluginId) {
+      return [];
+    }
+    return (uiSystemTabs.get(normalizedPluginId) || []).slice();
+  }
+
   function normalizeRegressionSuiteDescriptor(pluginId = "", suite = {}) {
     const normalizedPluginId = normalizePluginId(pluginId);
     if (!normalizedPluginId || !suite || typeof suite !== "object") {
@@ -1290,6 +1364,7 @@ export function createNovaPluginManager(context = {}) {
     const uiNovaTabsForPlugin = listPluginUiNovaTabs(plugin.id);
     const uiTabsForPlugin = listPluginUiTabs(plugin.id);
     const uiSecretsTabsForPlugin = listPluginUiSecretsTabs(plugin.id);
+    const uiSystemTabsForPlugin = listPluginUiSystemTabs(plugin.id);
     const regressionSuitesForPlugin = listPluginRegressionSuites(plugin.id);
     const internalRegressionModesForPlugin = listPluginInternalRegressionModes(plugin.id);
     const failuresForPlugin = listPluginFailures(plugin.id);
@@ -1319,6 +1394,8 @@ export function createNovaPluginManager(context = {}) {
       uiTabCount: uiTabsForPlugin.length,
       uiSecretsTabs: uiSecretsTabsForPlugin,
       uiSecretsTabCount: uiSecretsTabsForPlugin.length,
+      uiSystemTabs: uiSystemTabsForPlugin,
+      uiSystemTabCount: uiSystemTabsForPlugin.length,
       regressionSuiteCount: regressionSuitesForPlugin.length,
       internalRegressionModes: internalRegressionModesForPlugin,
       internalRegressionModeCount: internalRegressionModesForPlugin.length,
@@ -1392,6 +1469,10 @@ export function createNovaPluginManager(context = {}) {
       pluginName: String(pluginName || pluginId).trim() || pluginId,
       order: registrationSequence++
     };
+  }
+
+  function normalizeUiSystemTabDescriptor(pluginId = "", tab = {}) {
+    return normalizeUiSecretsTabDescriptor(pluginId, tab);
   }
 
   function listPluginTools(pluginId = "") {
@@ -1614,6 +1695,23 @@ export function createNovaPluginManager(context = {}) {
           ? existing.map((entry) => (entry.id === normalizedTab.id ? normalizedTab : entry))
           : [...existing, normalizedTab];
         uiSecretsTabs.set(pluginId, nextTabs);
+        return normalizedTab;
+      },
+      registerUiSystemTab: (tab = {}) => {
+        if (!canRegisterUiPanels) {
+          recordPluginFailure(pluginId, "manifest:ui-system-tab-denied", "System tab registration is not permitted");
+          return null;
+        }
+        const normalizedTab = normalizeUiSystemTabDescriptor(pluginId, tab);
+        if (!normalizedTab) {
+          return null;
+        }
+        const existing = uiSystemTabs.get(pluginId) || [];
+        const duplicate = existing.find((entry) => entry.id === normalizedTab.id);
+        const nextTabs = duplicate
+          ? existing.map((entry) => (entry.id === normalizedTab.id ? normalizedTab : entry))
+          : [...existing, normalizedTab];
+        uiSystemTabs.set(pluginId, nextTabs);
         return normalizedTab;
       },
       registerRegressionSuite: (suiteOrFactory = null) => {
@@ -1959,6 +2057,13 @@ export function createNovaPluginManager(context = {}) {
         ),
         uiSecretsTabs: activePlugins.flatMap((plugin) =>
           listPluginUiSecretsTabs(plugin.id).map((tab) => ({
+            ...tab,
+            pluginName: plugin.name,
+            enabled: isPluginEnabled(plugin.id)
+          }))
+        ),
+        uiSystemTabs: activePlugins.flatMap((plugin) =>
+          listPluginUiSystemTabs(plugin.id).map((tab) => ({
             ...tab,
             pluginName: plugin.name,
             enabled: isPluginEnabled(plugin.id)

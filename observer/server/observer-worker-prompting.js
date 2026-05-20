@@ -1,10 +1,16 @@
+const LOOP_LESSONS_STOP_WORDS = new Set(["with", "that", "this", "from", "have", "will", "they", "your", "when", "been", "also", "into", "more", "than", "then", "each", "such", "both", "very", "just", "over", "only", "most", "some", "what", "like", "time", "even", "back", "after", "before", "should", "could", "would", "about", "there", "their", "which", "these", "those"]);
+const LOOP_LESSONS_CACHE = { content: null, readAt: 0 };
+const LOOP_LESSONS_CACHE_TTL_MS = 60000;
+
 export function createObserverWorkerPrompting(context = {}) {
   const {
     INTAKE_TOOLS,
     OBSERVER_CONTAINER_OUTPUT_ROOT,
     OBSERVER_CONTAINER_WORKSPACE_ROOT,
     WORKER_TOOLS,
+    buildDocumentSearchSummary = async () => [],
     buildInstalledSkillsGuidanceNote,
+    buildAgentSkillsGuidanceNote,
     buildPromptMemoryGuidanceNote,
     buildTaskCapabilityPromptLines,
     extractConcreteTaskFileTargets,
@@ -24,16 +30,21 @@ export function createObserverWorkerPrompting(context = {}) {
     normalizeContainerPathForComparison,
     normalizeToolCallRecord,
     normalizeToolName,
-    parseToolCallArgs
+    parseToolCallArgs,
+    queryRepairLessons = async () => []
   } = context;
 
-  async function readLoopLessonsNote() {
+  async function readLoopLessonsNote(taskMessage = "") {
     if (!fs || !loopLessonsHostPath) return "";
     try {
-      const content = await fs.readFile(loopLessonsHostPath, "utf8");
+      const now = Date.now();
+      if (LOOP_LESSONS_CACHE.content === null || now - LOOP_LESSONS_CACHE.readAt > LOOP_LESSONS_CACHE_TTL_MS) {
+        LOOP_LESSONS_CACHE.content = await fs.readFile(loopLessonsHostPath, "utf8").catch(() => "");
+        LOOP_LESSONS_CACHE.readAt = now;
+      }
+      const content = LOOP_LESSONS_CACHE.content;
       const trimmed = String(content || "").trim();
       if (!trimmed) return "";
-      // Extract individual lesson blocks (each starts with ## )
       const blocks = [];
       let current = [];
       for (const line of trimmed.split("\n")) {
@@ -45,10 +56,41 @@ export function createObserverWorkerPrompting(context = {}) {
         }
       }
       if (current.length) blocks.push(current.join("\n").trim());
-      // Emit last 6 lessons, skip the header block
-      const lessons = blocks.filter((b) => b.startsWith("## ")).slice(-6);
-      if (!lessons.length) return "";
-      return `Past loop repair lessons — avoid repeating these patterns:\n${lessons.join("\n")}`;
+      const allBlocks = blocks.filter((b) => b.startsWith("## "));
+      const permanentRules = allBlocks.filter((b) => b.startsWith("## PERMANENT RULE"));
+      const regularLessons = allBlocks.filter((b) => !b.startsWith("## PERMANENT RULE"));
+      const seen = new Set();
+      const unique = [];
+      for (const block of [...regularLessons].reverse()) {
+        const stuckLine = block.match(/^- Stuck on: (.+)$/m);
+        const repairLine = block.match(/^- Repair: (.{0,50})/m);
+        const stuckTool = String(stuckLine?.[1] || "").trim().split(/[\s,]/)[0].toLowerCase();
+        const repairPrefix = String(repairLine?.[1] || "").trim().slice(0, 40).toLowerCase();
+        const key = `${stuckTool}|${repairPrefix}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          unique.unshift(block);
+        }
+      }
+      const selected = [...permanentRules, ...unique.slice(-5)];
+      // Augment with keyword-matched lessons from the task message
+      if (taskMessage) {
+        const stopWords = LOOP_LESSONS_STOP_WORDS;
+        const keywords = String(taskMessage).toLowerCase()
+          .match(/\b[a-z]{4,}\b/g)
+          ?.filter((w) => !stopWords.has(w))
+          .slice(0, 8) || [];
+        if (keywords.length) {
+          const matched = await queryRepairLessons(keywords, content);
+          for (const block of matched) {
+            if (!selected.includes(block)) {
+              selected.push(block);
+            }
+          }
+        }
+      }
+      if (!selected.length) return "";
+      return `Past loop repair lessons — avoid repeating these patterns:\n${selected.join("\n")}`;
     } catch {
       return "";
     }
@@ -89,16 +131,18 @@ export function createObserverWorkerPrompting(context = {}) {
     );
   }
 
-  function buildWorkerSpecialtyPromptLines({ brain, message = "", forceToolUse = false, preset = "autonomous", taskSpecialty = "" } = {}) {
+  function buildWorkerSpecialtyPromptLines({ brain, message = "", forceToolUse = false, preset = "autonomous", taskSpecialty = "", internalJobType = "" } = {}) {
     const text = String(message || "");
     const lower = text.toLowerCase();
+    const normalizedInternalJobType = String(internalJobType || "").trim();
     const looksScienceResearch = /\b(research|scientific|science|literature review|evidence synthesis|peer[- ]reviewed|citations?|references|study|studies|journal|paper|papers|methodology|hypothesis|dataset|analysis|biology|biological|biochem(?:istry)?|chemistry|chemical|metabolic|pathway|pathways|genetic|genomics|proteomics|clinical|bioinformatics)\b/.test(lower);
     const looksSensitiveBioChemDesign = /\b(metabolic pathways?|pathway design|biological pathway|bioengineering|synthetic biology|gene editing|pathogen|toxin|viral|virus|culture conditions?|lab protocol|wet lab)\b/.test(lower);
     const minConcreteTargets = getProjectNoChangeMinimumTargets();
     const specialty = String(taskSpecialty || brain?.specialty || "").trim().toLowerCase();
     const kind = String(brain?.kind || "").trim().toLowerCase();
     const isCodeWorker = kind === "worker" && specialty === "code";
-    const isProjectCycle = text.includes("/PROJECT-TODO.md");
+    const isProjectCycle = normalizedInternalJobType === "project_cycle"
+      || (!normalizedInternalJobType && typeof isProjectCycleMessage === "function" && isProjectCycleMessage(text));
     const mentionsSkillsOrToolbelt = /\b(skill library|skills library|openclaw skills|clawhub|toolbelt|missing tool|missing capability|request tool|request skills?)\b/i.test(text);
     const objectiveText = extractTaskDirectiveValue(text, "Objective:");
     const planningObjective = objectiveAllowsPlanningDocumentOutcome(objectiveText);
@@ -110,20 +154,20 @@ export function createObserverWorkerPrompting(context = {}) {
       message: text,
       taskSpecialty: specialty,
       forceToolUse,
-      preset
+      preset,
+      internalJobType: normalizedInternalJobType
     });
 
     if (String(preset || "").trim() === "internal-recreation") {
       return [
-        "You have unstructured free time. Use tools to do something genuinely interesting — browse the web, write a thought, sketch a project idea, or create a short piece of writing.",
-        "Before you return final=true, you must have written something to a file. Writing to your personal memory file counts.",
+        "You have unstructured free time. Use tools to do something genuinely interesting: browse the web, write a thought, sketch a project idea, or create a short piece of writing.",
+        "Before you return final=true, you must call update_daily_personal_notes with a concrete note for today.",
         "Do not describe what you plan to do in final_text. Describe what you actually did.",
         "Natural, first-person language is fine in final_text. There are no grammar restrictions for recreational writing.",
         "Never wrap your JSON response in markdown fences.",
         "Do not output headings, bullet lists, or analysis before the JSON object.",
         "Keep assistant_message short and factual, ideally one sentence under 20 words.",
-        "For file-based tools such as read_document, list_files, write_file, and edit_file, always include the explicit full file or directory path in the path field.",
-        "If you call write_file, include the full intended content. Do not call write_file with empty content.",
+        "Use update_daily_personal_notes for the persistent note. Use web_fetch only if you actually browse something.",
         "Do not claim to have browsed or read something you have not actually fetched with a tool.",
         ...buildTaskCapabilityPromptLines(capabilityProfile)
       ];
@@ -268,6 +312,7 @@ export function createObserverWorkerPrompting(context = {}) {
   } = {}) {
     const memoryGuidance = buildPromptMemoryGuidanceNote();
     const skillsGuidance = await buildInstalledSkillsGuidanceNote();
+    const agentSkillsGuidance = typeof buildAgentSkillsGuidanceNote === "function" ? await buildAgentSkillsGuidanceNote() : "";
 
     const contextLines = [];
 
@@ -374,6 +419,7 @@ export function createObserverWorkerPrompting(context = {}) {
       `Session id: ${sessionId}`,
       memoryGuidance,
       skillsGuidance,
+      agentSkillsGuidance,
       ...contextLines,
       ...intakeInjectedLines
     ].filter(Boolean).join("\n");
@@ -396,18 +442,56 @@ export function createObserverWorkerPrompting(context = {}) {
     const allowedMounts = observerConfig.mounts.filter((mount) => selectedMountIds.includes(mount.id));
     const memoryGuidance = buildPromptMemoryGuidanceNote();
     const skillsGuidance = await buildInstalledSkillsGuidanceNote();
-    const loopLessons = await readLoopLessonsNote();
-    const taskSpecialty = inferTaskSpecialty({ message, notes: Array.isArray(runtimeNotesExtra) ? runtimeNotesExtra.join("\n") : "" });
-    const workerSpecialtyLines = buildWorkerSpecialtyPromptLines({ brain, message, forceToolUse, preset, taskSpecialty });
-    const projectCycleMessage = isProjectCycleMessage(message);
+    const agentSkillsGuidance = typeof buildAgentSkillsGuidanceNote === "function" ? await buildAgentSkillsGuidanceNote() : "";
+    const normalizedInternalJobType = String(internalJobType || "").trim();
+    const loopLessons = await readLoopLessonsNote(message);
+    const taskSpecialty = inferTaskSpecialty({
+      message,
+      notes: Array.isArray(runtimeNotesExtra) ? runtimeNotesExtra.join("\n") : "",
+      internalJobType: normalizedInternalJobType
+    });
+    const workerSpecialtyLines = buildWorkerSpecialtyPromptLines({ brain, message, forceToolUse, preset, taskSpecialty, internalJobType: normalizedInternalJobType });
+    const projectCycleMessage = normalizedInternalJobType === "project_cycle"
+      || (!normalizedInternalJobType && typeof isProjectCycleMessage === "function" && isProjectCycleMessage(message));
+    // For project-cycle tasks with long messages, prepend a focused context note
+    const effectiveRuntimeNotes = Array.isArray(runtimeNotesExtra) ? [...runtimeNotesExtra] : [];
+    // Pre-seed retrieval and research tasks with Qdrant context
+    const isResearchTask = taskSpecialty === "retrieval" || (normalizedInternalJobType === "project_cycle" && /\b(research|evidence|synthesis|literature|sources?|references?|study|studies|paper|papers|journal|findings?)\b/i.test(message));
+    if (isResearchTask) {
+      try {
+        const searchQuery = message.slice(0, 300).replace(/\s+/g, " ").trim();
+        const chunks = await buildDocumentSearchSummary(searchQuery);
+        if (Array.isArray(chunks) && chunks.length > 1) {
+          effectiveRuntimeNotes.unshift(`Indexed workspace context for this task:\n${chunks.join("\n")}`);
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+    if (projectCycleMessage && String(message).length > 800 && typeof extractTaskDirectiveValue === "function") {
+      const objectiveText = extractTaskDirectiveValue(message, "Objective:") || "";
+      const inspectFirstText = extractTaskDirectiveValue(message, "Inspect first:") || "";
+      if (objectiveText || inspectFirstText) {
+        const focusNote = [
+          "Key task focus:",
+          objectiveText ? `Objective: ${String(objectiveText).slice(0, 200)}` : "",
+          inspectFirstText ? `Start with: ${String(inspectFirstText).slice(0, 120)}` : ""
+        ].filter(Boolean).join(" | ");
+        effectiveRuntimeNotes.unshift(focusNote);
+      }
+    }
 
     // Select minimal tool set when the task signals are specific enough
     const pluginTools = getPluginToolsByScope("worker");
     const toolSelection = typeof selectToolsForTask === "function"
-      ? selectToolsForTask(message, internalJobType, WORKER_TOOLS, pluginTools)
+      ? selectToolsForTask(message, normalizedInternalJobType, WORKER_TOOLS, pluginTools)
       : { tools: WORKER_TOOLS, pluginTools, confident: false };
     const effectiveWorkerTools = toolSelection.tools;
     const effectivePluginTools = toolSelection.pluginTools;
+    const effectiveToolNames = new Set([
+      ...effectiveWorkerTools,
+      ...effectivePluginTools
+    ].map((tool) => String(tool?.name || "").trim()).filter(Boolean));
 
     const coreLines = [
       `You are the ${brain.label}.`,
@@ -437,17 +521,24 @@ export function createObserverWorkerPrompting(context = {}) {
       "Respond with JSON only.",
       "If you need tools, return {\"assistant_message\":\"...\",\"tool_calls\":[...],\"final\":false}.",
       "Each tool call must look like {\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"tool_name\",\"arguments\":\"{\\\"key\\\":\\\"value\\\"}\"}}.",
-      "For edit_file, use arguments like {\"path\":\"...\",\"oldText\":\"...\",\"newText\":\"...\"}, {\"path\":\"...\",\"edits\":[{\"oldText\":\"...\",\"newText\":\"...\"}]}, or {\"path\":\"...\",\"content\":\"full file text\"} when replacing the whole file.",
-      "Do not leave out the path field on edit_file, write_file, read_document, or list_files. Repeat the explicit full path every time you call one of those tools.",
-      "When the task says to keep the rest of a file unchanged or edit in place, prefer edit_file and avoid write_file unless you intentionally provide the full preserved file content.",
+      effectiveToolNames.has("edit_file")
+        ? "For edit_file, use arguments like {\"path\":\"...\",\"oldText\":\"...\",\"newText\":\"...\"}, {\"path\":\"...\",\"edits\":[{\"oldText\":\"...\",\"newText\":\"...\"}]}, or {\"path\":\"...\",\"content\":\"full file text\"} when replacing the whole file."
+        : "",
+      ["edit_file", "write_file", "read_document", "list_files"].some((name) => effectiveToolNames.has(name))
+        ? "Do not leave out the path field on edit_file, write_file, read_document, or list_files. Repeat the explicit full path every time you call one of those tools."
+        : "",
+      effectiveToolNames.has("edit_file") && effectiveToolNames.has("write_file")
+        ? "When the task says to keep the rest of a file unchanged or edit in place, prefer edit_file and avoid write_file unless you intentionally provide the full preserved file content."
+        : "",
       "If the task is complete, return {\"assistant_message\":\"...\",\"final_text\":\"...\",\"tool_calls\":[],\"final\":true}.",
       "Never return role=tool or tool_results as the top-level response. Tool results are supplied by Observer, not by you.",
       "Do not return final=true after analysis alone. Final=true is only for a concrete change, a concrete artifact, or the exact no-change conclusion with inspected paths.",
       ...workerSpecialtyLines,
       loopLessons,
       memoryGuidance,
-      skillsGuidance
-    ].concat(runtimeNotesExtra).filter(Boolean);
+      skillsGuidance,
+      agentSkillsGuidance
+    ].concat(effectiveRuntimeNotes).filter(Boolean);
 
     // Allow plugins to inject lines into the worker system prompt (e.g. autoplan principles)
     const hookResult = await runPluginHook("worker:prompt:build", {

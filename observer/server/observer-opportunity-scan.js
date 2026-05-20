@@ -81,7 +81,7 @@ async function executeOpportunityScanJob(task) {
   const executionCapacity = await getIdleBackgroundExecutionCapacity();
   const idleWorkerBrains = await countIdleBackgroundWorkerBrains();
   const idleHelperBrains = await countIdleHelperBrains();
-  const availableWorkSlots = Math.max(1, Math.min(executionCapacity, idleWorkerBrains || executionCapacity));
+  const availableWorkSlots = Math.min(executionCapacity, idleWorkerBrains ?? executionCapacity);
   const activeLaneCount = new Set(
     otherInProgress
       .map((entry) => String(entry.queueLane || "").trim())
@@ -280,36 +280,62 @@ async function executeOpportunityScanJob(task) {
     }
     const nonProjectCreatedCount = created.filter((entry) => !["project_cycle", "helper_scout"].includes(String(entry.internalJobType || ""))).length;
     const remainingCapacity = Math.max(0, availableWorkSlots - reservedSlots - nonProjectCreatedCount);
-    if (remainingCapacity > 0) {
-      let queuedOpportunities = 0;
-      for (const entry of pendingOpportunityEntries) {
-        if (queuedOpportunities >= remainingCapacity) {
-          break;
+    if (opportunityScanState.recentKeys && typeof opportunityScanState.recentKeys === "object") {
+      const retentionCutoff = now - projectConfig.opportunityScanRetentionMs;
+      for (const key of Object.keys(opportunityScanState.recentKeys)) {
+        if (Number(opportunityScanState.recentKeys[key] || 0) < retentionCutoff) {
+          delete opportunityScanState.recentKeys[key];
         }
+      }
+    }
+    const skippedOpportunities = [];
+    if (remainingCapacity > 0) {
+      // Phase 1: cheap sync/recency filters — collect candidates for async key lookup
+      const validatedEntries = [];
+      for (const entry of pendingOpportunityEntries) {
+        if (validatedEntries.length >= remainingCapacity * 3) break;
         const message = String(entry?.message || "").trim();
-        const specialtyHint = String(entry?.specialtyHint || inferTaskSpecialty(entry)).trim().toLowerCase() || "general";
-        const preferredWorker = await chooseIdleWorkerBrainForSpecialty(specialtyHint);
         const opportunityKey = String(entry?.key || `opp-${hashRef(message)}`).trim() || `opp-${hashRef(message)}`;
         if (!message) {
+          skippedOpportunities.push({ key: opportunityKey, reason: "empty message" });
           continue;
         }
         if (isBogusOrMetaOpportunityMessage(message)) {
+          skippedOpportunities.push({ key: opportunityKey, reason: "bogus or meta message" });
           continue;
         }
         if (!entry?.sourceTaskId && !entry?.sourceDocumentPath && !entry?.projectName) {
-          continue;
-        }
-        if (created.some((taskEntry) => String(taskEntry.opportunityKey || "") === opportunityKey)) {
+          skippedOpportunities.push({ key: opportunityKey, reason: "no source context" });
           continue;
         }
         if (Number(opportunityScanState.recentKeys?.[opportunityKey] || 0) >= now - projectConfig.opportunityScanRetentionMs) {
+          skippedOpportunities.push({ key: opportunityKey, reason: "recently queued" });
           continue;
         }
-        const existing = await findTaskByOpportunityKey(opportunityKey);
-        if (existing) {
+        validatedEntries.push({ entry, message, opportunityKey });
+      }
+
+      // Phase 2: batch async key existence check
+      const existingFlags = await Promise.all(
+        validatedEntries.map(({ opportunityKey }) => findTaskByOpportunityKey(opportunityKey))
+      );
+
+      // Phase 3: create tasks for entries with no existing match
+      let queuedOpportunities = 0;
+      for (let i = 0; i < validatedEntries.length; i++) {
+        if (queuedOpportunities >= remainingCapacity) break;
+        const { entry, message, opportunityKey } = validatedEntries[i];
+        if (created.some((taskEntry) => String(taskEntry.opportunityKey || "") === opportunityKey)) {
+          skippedOpportunities.push({ key: opportunityKey, reason: "already queued this scan" });
+          continue;
+        }
+        if (existingFlags[i]) {
           opportunityScanState.recentKeys[opportunityKey] = now;
+          skippedOpportunities.push({ key: opportunityKey, reason: "active task exists" });
           continue;
         }
+        const specialtyHint = String(entry?.specialtyHint || inferTaskSpecialty(entry)).trim().toLowerCase() || "general";
+        const preferredWorker = await chooseIdleWorkerBrainForSpecialty(specialtyHint);
         const taskCreated = await createQueuedTask({
           message,
           sessionId: "opportunity-scan",
@@ -334,6 +360,13 @@ async function executeOpportunityScanJob(task) {
         queuedOpportunities += 1;
         reportLines.push(`Queued ${taskCreated.codename || taskCreated.id}: ${compactTaskText(message, 180)}`);
       }
+    }
+    if (skippedOpportunities.length > 0) {
+      const skippedSummary = skippedOpportunities.slice(0, 3)
+        .map((s) => `${compactTaskText(s.key, 40)} (${s.reason})`)
+        .join("; ");
+      const extraCount = skippedOpportunities.length > 3 ? ` +${skippedOpportunities.length - 3} more` : "";
+      reportLines.push(`Skipped ${skippedOpportunities.length} opportunit${skippedOpportunities.length === 1 ? "y" : "ies"}: ${skippedSummary}${extraCount}.`);
     }
     reportLines.push(`Idle worker brains available: ${idleWorkerBrains}.`);
     reportLines.push(`Idle helper brains available: ${idleHelperBrains}.`);

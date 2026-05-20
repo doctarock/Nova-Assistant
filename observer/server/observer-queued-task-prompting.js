@@ -35,18 +35,22 @@ export function createObserverQueuedTaskPrompting(context = {}) {
     if (!basePrompt) {
       return "";
     }
+    const internalJobType = String(task?.internalJobType || "").trim();
     const capabilitySummary = summarizeTaskCapabilities(
       inferTaskCapabilityProfile({
         message: basePrompt,
         taskSpecialty: inferTaskSpecialty(task),
         forceToolUse: Boolean(task?.forceToolUse || task?.internalJobType === "project_cycle"),
-        preset: "queued-task"
+        preset: "queued-task",
+        internalJobType
       })
     );
     const capabilityNote = capabilitySummary
       ? ` Predicted capability focus: ${capabilitySummary}.`
       : "";
-    if ((isProjectCycleTask(task) || isProjectCycleMessage(basePrompt)) && typeof buildProjectQueuedTaskExecutionPrompt === "function") {
+    const isExplicitProjectCycle = isProjectCycleTask(task)
+      || (!internalJobType && isProjectCycleMessage(basePrompt));
+    if (isExplicitProjectCycle && typeof buildProjectQueuedTaskExecutionPrompt === "function") {
       const projectPrompt = buildProjectQueuedTaskExecutionPrompt({
         capabilitySummary,
         expectedFirstMove: extractTaskDirectiveValue(basePrompt, "Expected first move:"),
@@ -66,7 +70,7 @@ export function createObserverQueuedTaskPrompting(context = {}) {
       suffix: [],
       taskId: String(task?.id || "").trim(),
       taskPrompt: basePrompt,
-      internalJobType: String(task?.internalJobType || "").trim(),
+      internalJobType,
       brainId: String(task?.requestedBrainId || "").trim()
     }).catch(() => ({ suffix: [] }));
     const suffix = Array.isArray(enrichResult?.suffix) ? enrichResult.suffix.filter(Boolean) : [];

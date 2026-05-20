@@ -1,8 +1,13 @@
+const helperScoutRejectHistory = new Map();
+let helperScoutRejectHistoryLoaded = false;
+
 export function createObserverMaintenanceSupport(context = {}) {
   const {
     HELPER_SCOUT_TIMEOUT_MS,
     MAX_WAITING_QUESTION_COUNT,
     MODEL_KEEPALIVE,
+    fs = null,
+    helperScoutRejectHistoryPath = "",
     getProjectRolePlaybooks = () => [],
     appendDailyQuestionLog,
     applyQuestionMaintenanceAnswer,
@@ -39,6 +44,7 @@ export function createObserverMaintenanceSupport(context = {}) {
     messageReferencesKnownOpportunitySource,
     readVolumeFile,
     runOllamaJsonGenerate,
+    searchChunks = null,
     writeVolumeText
   } = context;
 
@@ -70,7 +76,38 @@ export function createObserverMaintenanceSupport(context = {}) {
     });
   }
 
+  async function loadHelperScoutRejectHistory() {
+    if (helperScoutRejectHistoryLoaded || !fs || !helperScoutRejectHistoryPath) return;
+    helperScoutRejectHistoryLoaded = true;
+    try {
+      const raw = await fs.readFile(helperScoutRejectHistoryPath, "utf8").catch(() => "");
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (parsed && typeof parsed === "object") {
+        for (const [brainId, rejects] of Object.entries(parsed)) {
+          if (Array.isArray(rejects)) {
+            helperScoutRejectHistory.set(brainId, rejects);
+          }
+        }
+      }
+    } catch {
+      // corrupt file — start fresh
+    }
+  }
+
+  async function saveHelperScoutRejectHistory() {
+    if (!fs || !helperScoutRejectHistoryPath) return;
+    try {
+      const obj = Object.fromEntries(helperScoutRejectHistory);
+      const dir = helperScoutRejectHistoryPath.replace(/[/\\][^/\\]+$/, "");
+      if (dir) await fs.mkdir(dir, { recursive: true }).catch(() => {});
+      await fs.writeFile(helperScoutRejectHistoryPath, JSON.stringify(obj), "utf8");
+    } catch {
+      // non-fatal
+    }
+  }
+
   async function executeHelperScoutJob(task) {
+    await loadHelperScoutRejectHistory();
     const helperBrain = await getBrain(String(task.requestedBrainId || "").trim() || "bitnet");
     const snapshot = await buildOpportunityWorkspaceSnapshot();
     const documentScanSummary = await buildDocumentIndexSnapshot();
@@ -98,7 +135,7 @@ export function createObserverMaintenanceSupport(context = {}) {
       "Reply with JSON only.",
       "Do not use markdown fences, headings, or commentary outside the JSON object.",
       "Keep the JSON compact. Do not narrate how you evaluated every hat.",
-      "Return at most 1 task proposal.",
+      "Return at most 4 task proposals, ranked strongest first.",
       "Keep summary to one short sentence.",
       "Each proposal must be concise, actionable, and useful for a worker brain.",
       "Only propose tasks that can be delegated safely without user clarification.",
@@ -123,8 +160,14 @@ export function createObserverMaintenanceSupport(context = {}) {
       `Recent failed tasks: ${(snapshot.recentFailed || []).map((entry) => `${entry.id}: ${entry.summary || entry.message}`).join(" | ") || "none"}`,
       `Recent completed tasks: ${(snapshot.recentDone || []).map((entry) => `${entry.id}: ${entry.summary || entry.message}`).join(" | ") || "none"}`,
       `Priority documents: ${urgentDocuments.slice(0, 6).map((entry) => `${entry.relativePath}: ${entry.summary || entry.heading}`).join(" | ") || "none"}`,
-      `Relevant markdown: ${(snapshot.workspaceMarkdown || []).slice(0, 8).map((entry) => `${entry.path}: ${entry.heading || entry.summary}`).join(" | ") || "none"}`
-    ].join("\n");
+      `Relevant markdown: ${(snapshot.workspaceMarkdown || []).slice(0, 8).map((entry) => `${entry.path}: ${entry.heading || entry.summary}`).join(" | ") || "none"}`,
+      (() => {
+        const recentRejects = (helperScoutRejectHistory.get(helperBrain.id) || []).slice(-5);
+        return recentRejects.length
+          ? `Previously rejected proposals (do not re-propose these): ${recentRejects.map((r) => `"${r.message}" (${r.reason})`).join("; ")}`
+          : "";
+      })()
+    ].filter(Boolean).join("\n");
     const result = await runOllamaJsonGenerate(helperBrain.model, prompt, {
       timeoutMs: HELPER_SCOUT_TIMEOUT_MS,
       keepAlive: MODEL_KEEPALIVE,
@@ -195,7 +238,8 @@ export function createObserverMaintenanceSupport(context = {}) {
     const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
     const created = [];
     const allowedSpecialties = new Set(["code", "document", "general"]);
-    for (const proposal of tasks.slice(0, 1)) {
+    const brainRejects = helperScoutRejectHistory.get(helperBrain.id) || [];
+    for (const proposal of tasks.slice(0, 4)) {
       const message = compactTaskText(String(proposal?.message || "").trim(), 220);
       const specialtyHintRaw = String(proposal?.specialtyHint || "").trim().toLowerCase();
       const specialtyHint = allowedSpecialties.has(specialtyHintRaw) ? specialtyHintRaw : "general";
@@ -204,9 +248,11 @@ export function createObserverMaintenanceSupport(context = {}) {
         continue;
       }
       if (isBogusOrMetaOpportunityMessage(message)) {
+        brainRejects.push({ message: message.slice(0, 80), reason: "bogus or meta" });
         continue;
       }
       if (!messageReferencesKnownOpportunitySource(message, allowedRefs)) {
+        brainRejects.push({ message: message.slice(0, 80), reason: "no known source reference" });
         continue;
       }
       const anchors = deriveOpportunityAnchorData(message, {
@@ -216,11 +262,26 @@ export function createObserverMaintenanceSupport(context = {}) {
         workspaceMarkdown: snapshot?.workspaceMarkdown
       });
       if (!anchors || (!anchors.sourceTaskId && !anchors.sourceDocumentPath && !anchors.projectName)) {
+        brainRejects.push({ message: message.slice(0, 80), reason: "no anchor data" });
         continue;
       }
       const opportunityKey = `helper-scout:${helperBrain.id}:${hashRef(`${message}|${specialtyHint}`)}`;
       if (await findTaskByOpportunityKey(opportunityKey)) {
+        brainRejects.push({ message: message.slice(0, 80), reason: "already queued" });
         continue;
+      }
+      if (specialtyHint === "document" && typeof searchChunks === "function") {
+        try {
+          const qdrantResult = await searchChunks(message.slice(0, 200), {}, { limit: 1, syncBeforeSearch: false });
+          const topScore = Number(qdrantResult?.matches?.[0]?.score || 0);
+          if (qdrantResult?.available && topScore < 0.5) {
+            brainRejects.push({ message: message.slice(0, 80), reason: "no indexed content found" });
+            continue;
+          }
+        } catch { }
+      }
+      if (created.length > 0) {
+        break;
       }
       const preferredWorker = await chooseIdleWorkerBrainForSpecialty(specialtyHint || "general");
       const observerConfig = getObserverConfig();
@@ -243,6 +304,8 @@ export function createObserverMaintenanceSupport(context = {}) {
       });
       created.push(createdTask);
     }
+    helperScoutRejectHistory.set(helperBrain.id, brainRejects.slice(-20));
+    saveHelperScoutRejectHistory().catch(() => {});
     const parsedSummary = compactTaskText(String(parsed.summary || "").trim(), 220);
     const createdSummary = created.length
       ? created

@@ -37,6 +37,7 @@ const {
   loadTaskReshapeIssues,
   loadRegressionSuites,
   loadToolConfig,
+  loadAgentSkills,
   loadPanelOpenPreference,
   loadPanelFullscreenPreference,
   loadStateInspector,
@@ -588,6 +589,8 @@ refreshNovaBtn.onclick = loadNovaConfig;
 saveNovaBtn.onclick = saveNovaConfig;
 refreshToolsBtn.onclick = loadToolConfig;
 saveToolsBtn.onclick = saveToolConfig;
+const refreshAgentSkillsBtn = document.getElementById("refreshAgentSkillsBtn");
+if (refreshAgentSkillsBtn) refreshAgentSkillsBtn.onclick = loadAgentSkills;
 refreshPluginsBtn.onclick = loadPluginManagerPanel;
 if (installPluginUploadBtn) {
   installPluginUploadBtn.onclick = installUploadedPluginPackage;
@@ -680,6 +683,7 @@ loadNovaConfig();
 loadBrainConfig();
 loadSecretsCatalog();
 loadToolConfig();
+loadAgentSkills();
 loadPluginManagerPanel();
 loadTaskQueue();
 loadCronJobs();
@@ -692,6 +696,21 @@ pollCronEvents();
 pollTaskEvents();
 renderAttachmentList();
 updateRunButtonState();
-setInterval(refreshStatus, 15000);
-setInterval(pollCronEvents, 15000);
-setInterval(pollTaskEvents, 15000);
+// Adaptive status refresh: 2s burst after any task activity, 12s when idle.
+let _statusRefreshTimer = null;
+let _statusActiveUntil = 0;
+function _scheduleStatusRefresh() {
+  clearTimeout(_statusRefreshTimer);
+  const delay = Date.now() < _statusActiveUntil ? 2000 : 12000;
+  _statusRefreshTimer = setTimeout(() => { refreshStatus().catch(() => {}); _scheduleStatusRefresh(); }, delay);
+}
+function _bumpStatusActive() {
+  _statusActiveUntil = Date.now() + 12000;
+  _scheduleStatusRefresh();
+}
+window.addEventListener("observer:task-event", _bumpStatusActive);
+_scheduleStatusRefresh();
+
+// SSE handles real-time task/cron delivery; these are reconciliation safety nets only.
+setInterval(pollCronEvents, 30000);
+setInterval(pollTaskEvents, 30000);

@@ -34,6 +34,9 @@ export function createObserverWorkerTools(options = {}) {
     appendReadBasis = async () => null,
     runSandboxShell = async () => ({ ok: false, stdout: "", stderr: "" }),
     searchSkillLibrary = async () => [],
+    buildDocumentSearchSummary = async () => [],
+    searchAgentSkills = async () => [],
+    runAgentSkill = async () => ({ output: "", skillId: "", skillName: "", brainId: "", brainModel: "" }),
     workspaceTransactions = null,
     toolMoveMail = async () => ({}),
     toolReadDocument = async () => ({}),
@@ -235,7 +238,7 @@ async function toolShellCommand(args = {}) {
     throw new Error("command is required");
   }
   return runSandboxShell(command, {
-    timeoutMs: Math.max(1000, Math.min(Number(args.timeoutMs || 60000), 180000))
+    timeoutMs: Math.max(1000, Math.min(Number(args.timeoutMs || 60000), 360000))
   });
 }
 
@@ -447,6 +450,7 @@ const WORKER_TOOLS = [
   { name: "update_daily_personal_notes", description: "Append or replace Nova's host-backed daily personal notes for a specific date. Use this for recreation reflections that should persist outside the sandbox workspace.", parameters: { date: "YYYY-MM-DD", content: "string", mode: "append|replace" } },
   { name: "shell_command", description: "Run a shell command inside the observer sandbox container workspace", parameters: { command: "string", timeoutMs: "number" } },
   { name: "web_fetch", description: "Fetch a webpage or text resource in chunks. Start with the first chunk, then request more using offset and maxChars only if needed.", parameters: { url: "string", offset: "number", maxChars: "number" } },
+  { name: "search_documents", description: "Semantically search indexed workspace documents and attachments. Returns the most relevant chunks with source paths and content previews. Use before read_document when you need to locate relevant files rather than reading a known path.", parameters: { query: "string" } },
   { name: "search_skill_library", description: "Search the OpenClaw skill library for relevant tools or skills.", parameters: { query: "string", limit: "number" } },
   { name: "inspect_skill_library", description: "Inspect a specific OpenClaw skill by slug before deciding to install it.", parameters: { slug: "string" } },
   { name: "install_skill", description: "Request installation of an OpenClaw skill. This requires explicit user approval and should not be used autonomously.", parameters: { slug: "string" } },
@@ -467,7 +471,9 @@ const WORKER_TOOLS = [
   { name: "iot_turn_on", description: "Turn on a Home Assistant entity (light, switch, fan, etc.) by entity_id.", parameters: { instanceId: "string", entityId: "string", serviceData: "object", timeoutMs: "number" } },
   { name: "iot_turn_off", description: "Turn off a Home Assistant entity by entity_id.", parameters: { instanceId: "string", entityId: "string", timeoutMs: "number" } },
   { name: "iot_toggle", description: "Toggle a Home Assistant entity (on→off or off→on) by entity_id.", parameters: { instanceId: "string", entityId: "string", timeoutMs: "number" } },
-  { name: "iot_call_ha", description: "Make a raw Home Assistant REST API request. Use when core IoT tools don't cover the endpoint you need (e.g. /api/logbook, /api/calendars, /api/history).", parameters: { instanceId: "string", path: "string", method: "string", body: "object", timeoutMs: "number" } }
+  { name: "iot_call_ha", description: "Make a raw Home Assistant REST API request. Use when core IoT tools don't cover the endpoint you need (e.g. /api/logbook, /api/calendars, /api/history).", parameters: { instanceId: "string", path: "string", method: "string", body: "object", timeoutMs: "number" } },
+  { name: "search_agent_skills", description: "Search the local agent skills library by keyword or tag. Returns matching skill IDs, names, descriptions, and tags. Use before run_agent_skill to find the right skill.", parameters: { query: "string" } },
+  { name: "run_agent_skill", description: "Run a named skill from the agent skills library on a local model via Dogpile. The skill applies a focused system prompt (review, simplify, summarize, etc.) to the input and returns the output. Use this to get a second opinion, specialized analysis, or structured output on content you have already read.", parameters: { skill_id: "string", input: "string", brain_id: "string" } }
 ];
 
 function normalizePermissionApprovalDecision(value = "") {
@@ -647,6 +653,10 @@ async function executeWorkerToolCall(toolCall, context) {
   if (name === "update_daily_personal_notes") return toolUpdateDailyPersonalNotes(args);
   if (name === "shell_command") return toolShellCommand(args);
   if (name === "web_fetch") return toolWebFetch(args, context);
+  if (name === "search_documents") {
+    const lines = await buildDocumentSearchSummary(String(args.query || "").trim());
+    return { text: Array.isArray(lines) ? lines.join("\n") : String(lines || "") };
+  }
   if (name === "search_skill_library") return searchSkillLibrary(args.query, args.limit);
   if (name === "inspect_skill_library") return inspectSkillLibrarySkill(args.slug);
   if (name === "install_skill") throw new Error("install_skill requires explicit user approval");
@@ -807,6 +817,24 @@ async function executeWorkerToolCall(toolCall, context) {
   if (name === "iot_turn_off") return toolIotTurnOff(args);
   if (name === "iot_toggle") return toolIotToggle(args);
   if (name === "iot_call_ha") return toolIotCallHa(args);
+  if (name === "search_agent_skills") {
+    const skills = await searchAgentSkills(String(args.query || "").trim());
+    if (!skills.length) return { text: `No agent skills found matching "${args.query || ""}".`, skills };
+    const lines = [`Found ${skills.length} agent skill${skills.length === 1 ? "" : "s"}:`];
+    for (const skill of skills) {
+      const tags = Array.isArray(skill.tags) && skill.tags.length ? ` [${skill.tags.join(", ")}]` : "";
+      lines.push(`- ${skill.id}: ${skill.description}${tags}`);
+    }
+    return { text: lines.join("\n"), skills };
+  }
+  if (name === "run_agent_skill") {
+    const skillId = String(args.skill_id || "").trim();
+    const input = String(args.input || "").trim();
+    const brainId = String(args.brain_id || "").trim() || undefined;
+    if (!skillId || !input) throw new Error("run_agent_skill requires skill_id and input");
+    const result = await runAgentSkill(skillId, input, brainId);
+    return { text: result.output, skillId: result.skillId, skillName: result.skillName, brainId: result.brainId, brainModel: result.brainModel };
+  }
   // Fallback: try plugin-registered intake tools (e.g. record_philosophy)
   const pm = getPluginManager();
   if (pm && typeof pm.runHook === "function") {

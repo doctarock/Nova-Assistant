@@ -12,6 +12,7 @@ export function createObserverTaskExecutionSupport(context = {}) {
     getBrain,
     getBrainQueueLane,
     getOllamaEndpointHealth,
+    getProviderEndpointHealth = getOllamaEndpointHealth,
     getQueueLaneLoadSnapshot,
     getRoutingConfig,
     isImageMimeType,
@@ -62,7 +63,7 @@ function looksLikeResearchOrScienceTask(text = "") {
 
 function inferTaskSpecialty(task = {}) {
   const hinted = String(task.specialtyHint || task.opportunitySpecialty || "").trim().toLowerCase();
-  if (["code", "document", "general", "background", "creative", "vision", "retrieval"].includes(hinted)) {
+  if (["code", "document", "general", "background", "creative", "vision", "retrieval", "fast_worker"].includes(hinted)) {
     return hinted;
   }
   const internalJobType = String(task.internalJobType || "").trim().toLowerCase();
@@ -110,12 +111,14 @@ function inferTaskCapabilityProfile({
   message = "",
   taskSpecialty = "",
   forceToolUse = false,
-  preset = "autonomous"
+  preset = "autonomous",
+  internalJobType = ""
 } = {}) {
   const text = String(message || "").trim();
   const lower = text.toLowerCase();
   const specialty = String(taskSpecialty || "").trim().toLowerCase();
-  const isProjectCycle = text.includes("/PROJECT-TODO.md");
+  const normalizedInternalJobType = String(internalJobType || "").trim().toLowerCase();
+  const isProjectCycle = normalizedInternalJobType === "project_cycle";
   const isQueuedExecution = String(preset || "").trim().toLowerCase() === "queued-task";
   const looksCodeHeavy = forceToolUse || /\b(project|repo|repository|code|implement|implementation|refactor|debug|bug|fix|patch|todo|fixme|script|test|tests|api|backend|frontend)\b/.test(lower);
   const looksResearchHeavy = specialty === "retrieval" || looksLikeResearchOrScienceTask(lower);
@@ -435,7 +438,7 @@ async function executeCreativeHandoffPass({
   if (!creativeBrain) {
     return { used: false, reason: "creative_brain_missing" };
   }
-  const health = await getOllamaEndpointHealth(creativeBrain.ollamaBaseUrl).catch(() => null);
+  const health = await getProviderEndpointHealth(creativeBrain).catch(() => null);
   if (!health?.running) {
     return { used: false, reason: "creative_brain_unavailable", brainId: creativeBrain.id, brainLabel: creativeBrain.label };
   }
@@ -535,6 +538,7 @@ function scoreBrainForSpecialty(brain, specialty = "general") {
   if (specialty === "creative" && /\b(creative|brainstorm|story|marketing|copy)\b/.test(text)) return 80;
   if (specialty === "vision" && /\b(vision|image|photo|screenshot|visual)\b/.test(text)) return 80;
   if (specialty === "retrieval" && /\b(retrieval|embed|embedding|vector|search)\b/.test(text)) return 80;
+  if (specialty === "fast_worker" && /\b(fast|quick|quickly|minute|think|triage|shallow)\b/.test(text)) return 80;
   if (specialty === "general" && /\b(general|worker)\b/.test(text)) return 70;
   return 0;
 }
@@ -651,7 +655,7 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
   const workerCandidates = availableBrains.filter((brain) => brain.kind === "worker" && brain.toolCapable);
   const healthEntries = await Promise.all(workerCandidates.map(async (brain) => ({
     brain,
-    health: await getOllamaEndpointHealth(brain.ollamaBaseUrl)
+    health: await getProviderEndpointHealth(brain)
   })));
   const allHealthyWorkers = healthEntries
     .filter((entry) => entry.health.running)
@@ -730,7 +734,7 @@ async function selectSpecialistBrainRoute(task = {}, { preferredBrainId = "" } =
   if (!ordered.some((brain) => brain.id === defaultWorker.id)) {
     ordered.push(defaultWorker);
   }
-  const remoteTriageHealthy = remoteTriageBrain ? await getOllamaEndpointHealth(remoteTriageBrain.ollamaBaseUrl) : null;
+  const remoteTriageHealthy = remoteTriageBrain ? await getProviderEndpointHealth(remoteTriageBrain) : null;
   if (remoteTriageBrain && remoteTriageHealthy?.running && remoteTriageBrain.id !== preferredBrainId) {
     try {
       const prompt = [
@@ -1064,6 +1068,15 @@ async function buildCompletionReviewSummary({ task, runResponse, workerSummary, 
     const text = String(message || "").trim();
     const lower = text.toLowerCase();
     const jobType = String(internalJobType || "").trim().toLowerCase();
+
+    if (jobType === "agent_recreation") {
+      const allowed = new Set(["web_fetch", "update_daily_personal_notes"]);
+      return {
+        tools: workerTools.filter((tool) => allowed.has(String(tool?.name || "").trim())),
+        pluginTools: [],
+        confident: true
+      };
+    }
 
     // Build the included tool name set from matching families
     const included = new Set();

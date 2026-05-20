@@ -145,6 +145,10 @@ function renderTaskFilesList(files = []) {
   });
 }
 
+function stripTaskQueuePrefix(relativePath) {
+  return relativePath.replace(/^(derpy-observer-task-queue|observer-task-queue|task-queue)\//, "");
+}
+
 async function loadTaskFile(relativePath = "") {
   const {
     selectedFileEl,
@@ -160,16 +164,9 @@ async function loadTaskFile(relativePath = "") {
   }
   renderTaskFilesList(buildTaskFiles());
   try {
-    const isQueueFile = normalizedPath.startsWith("task-queue/")
-      || normalizedPath.startsWith("observer-task-queue/")
-      || normalizedPath.startsWith("derpy-observer-task-queue/");
+    const isQueueFile = /^(derpy-observer-task-queue|observer-task-queue|task-queue)\//.test(normalizedPath);
     const scope = isQueueFile ? "queue" : "workspace";
-    const requestPath = isQueueFile
-      ? normalizedPath
-          .replace(/^task-queue\//, "")
-          .replace(/^observer-task-queue\//, "")
-          .replace(/^derpy-observer-task-queue\//, "")
-      : normalizedPath;
+    const requestPath = isQueueFile ? stripTaskQueuePrefix(normalizedPath) : normalizedPath;
     const response = await fetch(`/api/inspect/file?scope=${encodeURIComponent(scope)}&file=${encodeURIComponent(requestPath)}`);
     const payload = await response.json();
     if (!response.ok || payload.ok === false) {
@@ -331,15 +328,11 @@ async function resetSimpleState() {
   }
   renderHint("Resetting internal state...");
   try {
-    const response = pluginAdminFetchRef
-      ? await pluginAdminFetchRef("/api/state/reset-simple-project", {
-          method: "POST",
-          headers: { "content-type": "application/json" }
-        })
-      : await fetch("/api/state/reset-simple-project", {
-          method: "POST",
-          headers: { "content-type": "application/json" }
-        });
+    const fetchFn = pluginAdminFetchRef ?? fetch;
+    const response = await fetchFn("/api/state/reset-simple-project", {
+      method: "POST",
+      headers: { "content-type": "application/json" }
+    });
     const payload = await response.json();
     if (!response.ok || payload.ok === false) {
       throw new Error(payload.error || "reset failed");
@@ -417,6 +410,11 @@ export async function mountPluginTab(context = {}) {
   const root = context?.root;
   if (!(root instanceof HTMLElement)) {
     return;
+  }
+  if (stateBrowserRoot !== root) {
+    activeScope = "workspace";
+    activeFileKey = "";
+    activeTaskFilePath = "";
   }
   stateBrowserRoot = root;
   observerAppRef = context?.observerApp && typeof context.observerApp === "object"

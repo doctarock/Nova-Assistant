@@ -126,6 +126,20 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           prompt: "find skills for mail automation",
           expectedType: "skill_search"
         },
+        {
+          id: "conversation-knock-knock",
+          label: "Knock-knock conversation",
+          kind: "intake",
+          prompt: "knock knock",
+          expectedType: "conversation"
+        },
+        {
+          id: "conversation-casual-wellbeing",
+          label: "Casual wellbeing conversation",
+          kind: "intake",
+          prompt: "how are you doing",
+          expectedType: "conversation"
+        },
       ]
     },
     {
@@ -2216,6 +2230,24 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           ]
         },
         {
+          id: "project-plugin-does-not-claim-other-plugin-queued-task",
+          label: "Project plugin does not claim another plugin's queued task",
+          kind: "internal",
+          mode: "queued_task_execution_prompt",
+          task: {
+            internalJobType: "mail_watch_question"
+          },
+          taskPrompt: "Summarize the user question. Context mentions /home/openclaw/.observer-sandbox/workspace/simple-check-project/PROJECT-TODO.md, but this is mail follow-up work.",
+          mustInclude: [
+            "write any user-facing artifacts into /home/openclaw/observer-output"
+          ],
+          mustNotInclude: [
+            "Keep project changes inside the workspace while the project is still in progress.",
+            "Do not write project deliverables to /home/openclaw/observer-output unless the whole project is complete and ready for export.",
+            "After the initial inspection, prefer edit_file for targeted project changes"
+          ]
+        },
+        {
           id: "project-cycle-worker-prompt-prioritizes-named-first-move",
           label: "Project-cycle worker prompt prioritizes named first move",
           kind: "internal",
@@ -2234,6 +2266,25 @@ export function buildRegressionSuiteDefinitions({ outputRoot = "" } = {}) {
           ],
           mustNotInclude: [
             "your first response should normally be a non-final JSON tool envelope that reads PROJECT-TODO.md and starts inspecting at least two additional concrete project files or directories when they are available."
+          ]
+        },
+        {
+          id: "project-worker-prompt-ignores-other-plugin-project-file-mentions",
+          label: "Project worker prompt ignores other plugin project file mentions",
+          kind: "internal",
+          mode: "worker_specialty_prompt_lines",
+          input: {
+            brain: {
+              kind: "worker",
+              specialty: "document"
+            },
+            message: "Summarize the mail follow-up. It mentions /home/openclaw/.observer-sandbox/workspace/simple-check-project/PROJECT-TODO.md as context.",
+            forceToolUse: true,
+            preset: "queued-task",
+            internalJobType: "mail_watch_question"
+          },
+          mustNotInclude: [
+            "For project-cycle work:"
           ]
         },
         {

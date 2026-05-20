@@ -99,6 +99,9 @@ function looksMalformedProjectName(name) {
   if (/^task-\d{10,}$/i.test(text)) {
     return true;
   }
+  if (/%[0-9a-f]{2}/i.test(text)) {
+    return true;
+  }
   return false;
 }
 
@@ -452,7 +455,7 @@ main().catch((error) => {
       "-lc",
       `cd ${quoteShellPath(observerContainerWorkspaceRoot)} && ${normalizedCommand}`
     ], {
-      timeoutMs: Math.max(1000, Math.min(Number(timeoutMs || 60000), 180000))
+      timeoutMs: Math.max(1000, Math.min(Number(timeoutMs || 60000), 360000))
     });
     return {
       code: result.code,

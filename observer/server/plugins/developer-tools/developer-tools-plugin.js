@@ -91,22 +91,22 @@ function inferSubsystem(payload = {}) {
 function normalizeHookSummary(hookName = "", payload = {}) {
   const hook = String(hookName || "").trim();
   const method = compactText(String(payload?.method || "").trim(), 12);
-  const path = compactText(String(payload?.path || "").trim(), 180);
+  const urlPath = compactText(String(payload?.path || "").trim(), 180);
   const eventType = compactText(String(payload?.type || "").trim(), 120);
   if (hook.startsWith("http:request-")) {
     const statusCode = Number(payload?.statusCode || 0);
     if (hook.endsWith("started")) {
-      return compactText(`${hook} ${method} ${path}`.trim(), 260);
+      return compactText(`${hook} ${method} ${urlPath}`.trim(), 260);
     }
     return compactText(
-      `${hook} ${method} ${path} ${statusCode || ""} ${Number(payload?.durationMs || 0) || 0}ms`.trim(),
+      `${hook} ${method} ${urlPath} ${statusCode || ""} ${Number(payload?.durationMs || 0) || 0}ms`.trim(),
       260
     );
   }
   if (hook.startsWith("observer:event")) {
     return compactText(`${hook} ${eventType}`.trim(), 260);
   }
-  return compactText(`${hook} ${eventType || path || ""}`.trim(), 260);
+  return compactText(`${hook} ${eventType || urlPath || ""}`.trim(), 260);
 }
 
 // ─── Plugin factory ───────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ export function createDeveloperToolsPlugin(options = {}) {
       if (hookFilter && !String(entry.hook || "").toLowerCase().includes(hookFilter)) {
         return false;
       }
-      if (subsystemFilter && sanitizeHookToken(entry.subsystem || "") !== subsystemFilter) {
+      if (subsystemFilter && !sanitizeHookToken(entry.subsystem || "").includes(subsystemFilter)) {
         return false;
       }
       if (contains) {
@@ -218,6 +218,7 @@ export function createDeveloperToolsPlugin(options = {}) {
     events.splice(0, events.length);
     hookCounts.clear();
     droppedCount = 0;
+    sequence = 0;
     return { clearedCount };
   }
 
@@ -356,12 +357,11 @@ export function createDeveloperToolsPlugin(options = {}) {
         });
       }
 
-      // Flight Recorder — UI tab
-      if (typeof api.registerUiTab === "function") {
-        api.registerUiTab({
+      // Flight Recorder - System subtab
+      if (typeof api.registerUiSystemTab === "function") {
+        api.registerUiSystemTab({
           id: "flight-recorder",
           title: "Flight Recorder",
-          icon: "F",
           order: 85,
           scriptUrl: "/api/plugin-ui/flight-recorder/tab.js"
         });
@@ -387,11 +387,7 @@ export function createDeveloperToolsPlugin(options = {}) {
       // ── Hook Explorer routes ──────────────────────────────────────────────
       app.get("/api/plugins/hook-explorer/stats", async (_req, res) => {
         try {
-          const getStats = api.getCapability("getHookExplorerStats");
-          if (typeof getStats !== "function") {
-            return res.status(500).json({ ok: false, error: "hook explorer stats capability is unavailable" });
-          }
-          res.json({ ok: true, stats: getStats() });
+          res.json({ ok: true, stats: buildStats() });
         } catch (error) {
           res.status(500).json({ ok: false, error: String(error?.message || error || "failed to read hook explorer stats") });
         }
@@ -399,11 +395,7 @@ export function createDeveloperToolsPlugin(options = {}) {
 
       app.get("/api/plugins/hook-explorer/events", async (req, res) => {
         try {
-          const readEventsCapability = api.getCapability("readHookExplorerEvents");
-          if (typeof readEventsCapability !== "function") {
-            return res.status(500).json({ ok: false, error: "hook explorer read capability is unavailable" });
-          }
-          const result = readEventsCapability(req.query || {});
+          const result = readEvents(req.query || {});
           res.json({ ok: true, ...result, stats: buildStats() });
         } catch (error) {
           res.status(500).json({ ok: false, error: String(error?.message || error || "failed to read hook explorer events") });
@@ -412,11 +404,7 @@ export function createDeveloperToolsPlugin(options = {}) {
 
       app.post("/api/plugins/hook-explorer/clear", async (_req, res) => {
         try {
-          const clearEventsCapability = api.getCapability("clearHookExplorerEvents");
-          if (typeof clearEventsCapability !== "function") {
-            return res.status(500).json({ ok: false, error: "hook explorer clear capability is unavailable" });
-          }
-          const result = clearEventsCapability();
+          const result = clearEvents();
           res.json({ ok: true, ...result, stats: buildStats() });
         } catch (error) {
           res.status(500).json({ ok: false, error: String(error?.message || error || "failed to clear hook explorer events") });

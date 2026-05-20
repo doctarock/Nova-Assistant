@@ -31,7 +31,7 @@ export function createObserverBrainConfigDomain(options = {}) {
     attachHelperAnalysisToRelatedTasks = async () => {},
     localOllamaBaseUrl = "http://127.0.0.1:11434",
     modelKeepAlive = "",
-    ollamaContainer = "openclaw-ollama",
+    ollamaContainer = "nova-ollama",
     helperIdleReserveCount = 0,
     helperShadowCacheEnabled = false,
     helperAnalysisTimeoutMs = 1100,
@@ -118,10 +118,36 @@ export function createObserverBrainConfigDomain(options = {}) {
 
   function serializeBrainEndpointConfig(entry = {}, id = "") {
     const endpointId = sanitizeConfigId(id, "endpoint");
+    const provider = normalizeProviderId(entry?.provider || "ollama");
     return {
       label: String(entry?.label || endpointId).trim() || endpointId,
-      baseUrl: normalizeOllamaBaseUrl(entry?.baseUrl || "")
+      provider,
+      baseUrl: normalizeProviderBaseUrl(entry?.baseUrl || "", provider),
+      apiKeyEnv: String(entry?.apiKeyEnv || "").trim(),
+      apiKeyHandle: String(entry?.apiKeyHandle || "").trim()
     };
+  }
+
+  function normalizeProviderId(value = "") {
+    const normalized = String(value || "ollama").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+    if (["openai", "openai-compatible", "openrouter", "lmstudio", "vllm"].includes(normalized)) {
+      return "openai-compatible";
+    }
+    return normalized || "ollama";
+  }
+
+  function getDefaultProviderBaseUrl(provider = "ollama") {
+    return normalizeProviderId(provider) === "ollama"
+      ? localOllamaBaseUrl
+      : "https://api.openai.com/v1";
+  }
+
+  function normalizeProviderBaseUrl(value = "", provider = "ollama") {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return getDefaultProviderBaseUrl(provider);
+    }
+    return (/^[a-z]+:\/\//i.test(raw) ? raw : `http://${raw}`).replace(/\/+$/, "");
   }
 
   function getConfiguredBrainEndpoints() {
@@ -131,10 +157,13 @@ export function createObserverBrainConfigDomain(options = {}) {
     const entries = Object.entries(configured).map(([id, entry]) => [String(id), {
       id: String(id),
       label: String(entry?.label || id),
-      baseUrl: normalizeOllamaBaseUrl(entry?.baseUrl || "")
+      provider: normalizeProviderId(entry?.provider || "ollama"),
+      baseUrl: normalizeProviderBaseUrl(entry?.baseUrl || "", entry?.provider || "ollama"),
+      apiKeyEnv: String(entry?.apiKeyEnv || "").trim(),
+      apiKeyHandle: String(entry?.apiKeyHandle || "").trim()
     }]);
     if (!entries.some(([id]) => id === "local")) {
-      entries.unshift(["local", { id: "local", label: "Local Ollama", baseUrl: localOllamaBaseUrl }]);
+      entries.unshift(["local", { id: "local", label: "Local Ollama", provider: "ollama", baseUrl: localOllamaBaseUrl, apiKeyEnv: "", apiKeyHandle: "" }]);
     }
     return Object.fromEntries(entries);
   }
@@ -145,25 +174,33 @@ export function createObserverBrainConfigDomain(options = {}) {
       ? getObserverConfig().brains.assignments
       : {};
     const endpointId = String(assignments[String(brainId || "")] || "local");
-    const endpoint = endpoints[endpointId] || endpoints.local || { id: "local", label: "Local Ollama", baseUrl: localOllamaBaseUrl };
+    const endpoint = endpoints[endpointId] || endpoints.local || { id: "local", label: "Local Ollama", provider: "ollama", baseUrl: localOllamaBaseUrl };
     return { ...endpoint, id: endpoint.id || endpointId };
   }
 
   function decorateBrain(brain = {}) {
-    const endpoint = brain?.endpointId || brain?.ollamaBaseUrl
+    const endpoint = brain?.endpointId || brain?.ollamaBaseUrl || brain?.baseUrl
       ? {
           id: String(brain.endpointId || "custom"),
           label: String(brain.endpointLabel || brain.endpointId || "Custom endpoint"),
-          baseUrl: normalizeOllamaBaseUrl(brain.ollamaBaseUrl || "")
+          provider: normalizeProviderId(brain.provider || "ollama"),
+          baseUrl: normalizeProviderBaseUrl(brain.baseUrl || brain.ollamaBaseUrl || "", brain.provider || "ollama"),
+          apiKeyEnv: String(brain.apiKeyEnv || "").trim(),
+          apiKeyHandle: String(brain.apiKeyHandle || "").trim()
         }
       : getBrainEndpointForId(brain?.id || "");
-    const baseUrl = normalizeOllamaBaseUrl(endpoint.baseUrl || "");
+    const provider = normalizeProviderId(endpoint.provider || "ollama");
+    const baseUrl = normalizeProviderBaseUrl(endpoint.baseUrl || "", provider);
     return {
       ...brain,
+      provider,
       endpointId: String(endpoint.id || "local"),
       endpointLabel: String(endpoint.label || endpoint.id || "Local Ollama"),
+      baseUrl,
       ollamaBaseUrl: baseUrl,
-      remote: baseUrl !== localOllamaBaseUrl,
+      apiKeyEnv: String(endpoint.apiKeyEnv || brain?.apiKeyEnv || "").trim(),
+      apiKeyHandle: String(endpoint.apiKeyHandle || brain?.apiKeyHandle || "").trim(),
+      remote: provider !== "ollama" || baseUrl !== localOllamaBaseUrl,
       queueLane: String(brain?.queueLane || "").trim()
     };
   }
@@ -228,7 +265,10 @@ export function createObserverBrainConfigDomain(options = {}) {
       ? {
           id: String(entry.endpointId || id),
           label: String(entry.endpointLabel || entry.label || id),
-          baseUrl: normalizeOllamaBaseUrl(entry.baseUrl)
+          provider: normalizeProviderId(entry.provider || "ollama"),
+          baseUrl: normalizeProviderBaseUrl(entry.baseUrl, entry.provider || "ollama"),
+          apiKeyEnv: String(entry.apiKeyEnv || "").trim(),
+          apiKeyHandle: String(entry.apiKeyHandle || "").trim()
         }
       : (() => {
           const configuredEndpoints = getConfiguredBrainEndpoints();
@@ -247,9 +287,13 @@ export function createObserverBrainConfigDomain(options = {}) {
       cronCapable: entry.cronCapable === true,
       description: String(entry.description || "Network Ollama brain"),
       queueLane: String(entry.queueLane || "").trim(),
+      provider: endpoint.provider,
       endpointId: endpoint.id,
       endpointLabel: endpoint.label,
-      ollamaBaseUrl: endpoint.baseUrl
+      baseUrl: endpoint.baseUrl,
+      ollamaBaseUrl: endpoint.baseUrl,
+      apiKeyEnv: endpoint.apiKeyEnv,
+      apiKeyHandle: endpoint.apiKeyHandle
     });
   }
 
@@ -420,6 +464,55 @@ export function createObserverBrainConfigDomain(options = {}) {
     }
   }
 
+  async function inspectProviderEndpoint(endpoint = {}) {
+    const provider = normalizeProviderId(endpoint?.provider || "ollama");
+    const baseUrl = normalizeProviderBaseUrl(endpoint?.baseUrl || endpoint?.ollamaBaseUrl || "", provider);
+    if (provider === "ollama") {
+      return {
+        provider,
+        ...(await inspectOllamaEndpoint(baseUrl))
+      };
+    }
+    const controller = new AbortController();
+    const timeoutMs = 12000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const headers = {};
+      const apiKey = String(process.env[String(endpoint?.apiKeyEnv || "").trim()] || (provider === "openai-compatible" ? process.env.OPENAI_API_KEY || "" : "")).trim();
+      if (apiKey) {
+        headers.authorization = `Bearer ${apiKey}`;
+      }
+      const response = await fetch(`${baseUrl}/models`, { method: "GET", headers, signal: controller.signal });
+      let parsed = {};
+      try {
+        parsed = await response.json();
+      } catch {
+        parsed = {};
+      }
+      return {
+        ok: response.ok,
+        provider,
+        baseUrl,
+        status: response.status,
+        running: response.ok,
+        modelCount: Array.isArray(parsed?.data) ? parsed.data.length : 0,
+        error: response.ok ? "" : String(parsed?.error?.message || parsed?.error || `Provider API returned ${response.status}`)
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        provider,
+        baseUrl,
+        status: 0,
+        running: false,
+        modelCount: 0,
+        error: error?.name === "AbortError" ? `Observer timeout after ${Math.round(timeoutMs / 1000)}s` : String(error?.message || "failed to reach provider API")
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async function getOllamaEndpointHealth(baseUrl = localOllamaBaseUrl) {
     const normalizedBaseUrl = normalizeOllamaBaseUrl(baseUrl);
     const now = Date.now();
@@ -432,12 +525,21 @@ export function createObserverBrainConfigDomain(options = {}) {
     return health;
   }
 
+  async function getProviderEndpointHealth(endpoint = {}) {
+    const provider = normalizeProviderId(endpoint?.provider || "ollama");
+    const baseUrl = normalizeProviderBaseUrl(endpoint?.baseUrl || endpoint?.ollamaBaseUrl || "", provider);
+    if (provider === "ollama") {
+      return getOllamaEndpointHealth(baseUrl);
+    }
+    return inspectProviderEndpoint({ ...endpoint, provider, baseUrl });
+  }
+
   async function listHealthyToolWorkers() {
     const availableBrains = await listAvailableBrains();
     const workerCandidates = availableBrains.filter((brain) => brain.kind === "worker" && brain.toolCapable);
     const healthEntries = await Promise.all(workerCandidates.map(async (brain) => ({
       brain,
-      health: await getOllamaEndpointHealth(brain.ollamaBaseUrl)
+      health: await getProviderEndpointHealth(brain)
     })));
     return healthEntries.filter((entry) => entry.health?.running).map((entry) => entry.brain);
   }
@@ -449,6 +551,45 @@ export function createObserverBrainConfigDomain(options = {}) {
     const specialty = String(brain.specialty || "").trim().toLowerCase();
     const text = [brain.id, brain.label, brain.model, brain.description, specialty].map((value) => String(value || "")).join(" ").toLowerCase();
     return specialty !== "retrieval" && !/\b(embed|embedding|vector|mxbai)\b/.test(text);
+  }
+
+  function isFastThinkingBrain(brain = {}) {
+    const specialty = String(brain?.specialty || "").trim().toLowerCase();
+    const id = String(brain?.id || "").trim().toLowerCase();
+    return (specialty === "fast_worker" || id === "fast_worker")
+      && ["worker", "helper"].includes(String(brain?.kind || "").trim());
+  }
+
+  function hasThinkingAnalysisBrainConfigured() {
+    const enabledBrainIds = getEnabledBrainIds();
+    if (enabledBrainIds.has("helper") || enabledBrainIds.has("fast_worker")) {
+      return true;
+    }
+    const customBrains = Array.isArray(getObserverConfig()?.brains?.custom)
+      ? getObserverConfig().brains.custom
+      : [];
+    return customBrains.some((brain) =>
+      enabledBrainIds.has(String(brain?.id || "").trim())
+      && String(brain?.specialty || "").trim().toLowerCase() === "fast_worker"
+    );
+  }
+
+  async function chooseThinkingAnalysisBrain() {
+    const brains = await listAvailableBrains();
+    const candidates = [
+      ...brains.filter((brain) => isFastThinkingBrain(brain)),
+      ...brains.filter((brain) => String(brain?.id || "").trim() === "helper")
+    ];
+    for (const brain of candidates) {
+      if (!brain?.ollamaBaseUrl) {
+        return brain;
+      }
+      const health = await getProviderEndpointHealth(brain).catch(() => null);
+      if (health?.running) {
+        return brain;
+      }
+    }
+    return null;
   }
 
   async function listHealthyRoutingHelpers() {
@@ -463,7 +604,7 @@ export function createObserverBrainConfigDomain(options = {}) {
     });
     const healthEntries = await Promise.all(helperCandidates.map(async (brain) => ({
       brain,
-      health: await getOllamaEndpointHealth(brain.ollamaBaseUrl)
+      health: await getProviderEndpointHealth(brain)
     })));
     return healthEntries.filter((entry) => entry.health?.running).map((entry) => entry.brain);
   }
@@ -540,7 +681,7 @@ export function createObserverBrainConfigDomain(options = {}) {
       const activeTask = inProgress.find((task) => String(task.requestedBrainId || "") === String(brain.id || ""));
       const lastActivityTs = brainTasks.reduce((best, task) =>
         Math.max(best, Number(task.completedAt || task.updatedAt || task.startedAt || task.createdAt || 0)), 0);
-      const endpointHealthy = brain.ollamaBaseUrl ? (await getOllamaEndpointHealth(brain.ollamaBaseUrl))?.running === true : true;
+      const endpointHealthy = brain.ollamaBaseUrl ? (await getProviderEndpointHealth(brain))?.running === true : true;
       return {
         id: brain.id,
         label: brain.label,
@@ -724,7 +865,7 @@ export function createObserverBrainConfigDomain(options = {}) {
     const excluded = new Set((Array.isArray(excludedBrainIds) ? excludedBrainIds : [excludedBrainIds]).map((value) => String(value || "").trim()).filter(Boolean));
     const currentBrain = await getBrain(String(task?.requestedBrainId || "worker").trim() || "worker");
     const currentLane = String(task?.queueLane || currentBrain?.queueLane || getBrainQueueLane(currentBrain)).trim();
-    const currentEndpoint = normalizeOllamaBaseUrl(String(task?.ollamaBaseUrl || currentBrain?.ollamaBaseUrl || "").trim());
+    const currentEndpoint = normalizeProviderBaseUrl(String(task?.ollamaBaseUrl || currentBrain?.ollamaBaseUrl || "").trim(), currentBrain?.provider || "ollama");
     const availableBrains = await listAvailableBrains();
     const snapshot = await buildBrainActivitySnapshot();
     const snapshotById = new Map(snapshot.map((entry) => [String(entry.id || ""), entry]));
@@ -733,7 +874,7 @@ export function createObserverBrainConfigDomain(options = {}) {
       .map((brain) => {
         const activity = snapshotById.get(String(brain.id || "")) || {};
         const lane = String(brain.queueLane || getBrainQueueLane(brain)).trim();
-        const endpoint = normalizeOllamaBaseUrl(String(brain.ollamaBaseUrl || "").trim());
+        const endpoint = normalizeProviderBaseUrl(String(brain.ollamaBaseUrl || "").trim(), brain.provider || "ollama");
         return {
           brain,
           activity,
@@ -859,6 +1000,8 @@ export function createObserverBrainConfigDomain(options = {}) {
           keepAlive: modelKeepAlive,
           options: warmup.options,
           baseUrl: warmup.brain.ollamaBaseUrl,
+          provider: warmup.brain.provider,
+          apiKeyEnv: warmup.brain.apiKeyEnv,
           brainId: warmup.brain.id,
           leaseOwnerId: `warmup:${String(warmup.brain.id || warmup.brain.model || "brain").trim()}`,
           leaseWaitMs: 1000
@@ -951,11 +1094,10 @@ export function createObserverBrainConfigDomain(options = {}) {
   }
 
   function shouldUseHelperAnalysis(message = "") {
-    const enabledBrainIds = getEnabledBrainIds();
     const text = String(message || "").trim();
     const lower = text.toLowerCase();
     const words = text.split(/\s+/).filter(Boolean).length;
-    return enabledBrainIds.has("helper")
+    return hasThinkingAnalysisBrainConfigured()
       && !!text
       && (
         text.length >= 180
@@ -967,8 +1109,8 @@ export function createObserverBrainConfigDomain(options = {}) {
   }
 
   async function runHelperAnalysis({ message = "", sessionId = "Main" } = {}) {
-    const helperBrain = await getBrain("helper");
-    if (!helperBrain || helperBrain.id !== "helper") {
+    const helperBrain = await chooseThinkingAnalysisBrain();
+    if (!helperBrain) {
       return null;
     }
     const prompt = [
@@ -987,6 +1129,8 @@ export function createObserverBrainConfigDomain(options = {}) {
       timeoutMs: helperAnalysisTimeoutMs,
       keepAlive: modelKeepAlive,
       baseUrl: helperBrain.ollamaBaseUrl,
+      provider: helperBrain.provider,
+      apiKeyEnv: helperBrain.apiKeyEnv,
       brainId: helperBrain.id,
       leaseOwnerId: `helper-analysis:${String(sessionId || "Main").trim() || "Main"}`,
       leaseWaitMs: Math.min(Number(helperAnalysisTimeoutMs || 0), 500)
@@ -1111,9 +1255,11 @@ export function createObserverBrainConfigDomain(options = {}) {
     getIdleBackgroundExecutionCapacity,
     getOllamaEndpointHealth,
     getOllamaEndpointTransportCooldown,
+    getProviderEndpointHealth,
     getQueueLaneLoadSnapshot,
     getTotalBackgroundExecutionCapacity,
     inspectOllamaEndpoint,
+    inspectProviderEndpoint,
     invalidateObserverConfigCaches,
     isCpuQueueLane,
     isGenerativeHelperBrain,
@@ -1126,6 +1272,8 @@ export function createObserverBrainConfigDomain(options = {}) {
     listOllamaModels,
     markOllamaEndpointTransportFailure,
     normalizeOllamaBaseUrl,
+    normalizeProviderBaseUrl,
+    normalizeProviderId,
     runOllamaEmbed,
     scoreBrainForSpecialty,
     scoreIntakePlanningBrain,

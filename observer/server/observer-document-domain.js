@@ -269,6 +269,9 @@ export function createObserverDocumentDomain(options = {}) {
 
   function isGeneratedObserverArtifactPath(filePath = "") {
     const lower = normalizeDocumentPathForRules(filePath);
+    if (/[/\\]project-backups[/\\]/i.test(lower)) {
+      return true;
+    }
     const basename = pathModule.basename(lower);
     return isObserverOutputDocumentPath(lower) && (
       /^task-\d+.*\.(txt|md|json)$/i.test(basename)
@@ -307,17 +310,17 @@ export function createObserverDocumentDomain(options = {}) {
       return true;
     }
     return [
-      "\\openclaw-observer\\.agent-workspaces\\",
-      "\\openclaw-observer\\workspace-prompt-edit\\",
-      "\\openclaw-observer\\workspace-prompt-edit\\memory\\questions\\",
-      "\\openclaw-observer\\workspace-prompt-edit\\memory\\briefings\\",
-      "\\openclaw-observer\\workspace-prompt-edit\\today.md",
-      "\\openclaw-observer\\workspace-prompt-edit\\memory\\202",
-      "\\openclaw-observer\\package-lock.json",
-      "\\openclaw-observer\\observer.language.json",
-      "\\openclaw-observer\\observer.lexicon.json",
-      "\\openclaw-observer\\server.js",
-      "\\openclaw-observer\\public\\"
+      "\\nova-observer\\.agent-workspaces\\",
+      "\\nova-observer\\workspace-prompt-edit\\",
+      "\\nova-observer\\workspace-prompt-edit\\memory\\questions\\",
+      "\\nova-observer\\workspace-prompt-edit\\memory\\briefings\\",
+      "\\nova-observer\\workspace-prompt-edit\\today.md",
+      "\\nova-observer\\workspace-prompt-edit\\memory\\202",
+      "\\nova-observer\\package-lock.json",
+      "\\nova-observer\\observer.language.json",
+      "\\nova-observer\\observer.lexicon.json",
+      "\\nova-observer\\server.js",
+      "\\nova-observer\\public\\"
     ].some((term) => lower.includes(term));
   }
 
@@ -429,7 +432,7 @@ export function createObserverDocumentDomain(options = {}) {
     if (isObserverOutputDocumentPath(relativePath)) priority = Math.max(0, priority - 2);
     if (/\b(mail|schedule|legal|action)\b/.test(detectDocumentCategory({ relativePath, text: compact, kind: "" }))) priority += 1;
     if ([".js", ".ts", ".tsx", ".jsx", ".json", ".html", ".htm", ".xml"].includes(extension)) priority -= 2;
-    if (/^openclaw-observer\//i.test(relativePath)) priority -= 1;
+    if (/^nova-observer\//i.test(relativePath)) priority -= 1;
     if (isLowValueRepositoryDocument(relativePath)) priority -= 3;
     priority = Math.max(0, priority);
 

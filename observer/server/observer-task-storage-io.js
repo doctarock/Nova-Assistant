@@ -1,11 +1,28 @@
+const VOLUME_WRITE_RETRY_CODES = new Set([
+  "EBUSY",
+  "EMFILE",
+  "ENFILE",
+  "EPERM",
+  "EACCES",
+  "UNKNOWN"
+]);
+
+function isRetryableVolumeWriteError(error) {
+  return VOLUME_WRITE_RETRY_CODES.has(String(error?.code || "").trim().toUpperCase());
+}
+
+function waitForVolumeWriteRetry(attempt) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.min(2000, 50 * Math.pow(2, attempt)));
+  });
+}
+
 export function createObserverTaskStorageIo(options = {}) {
   const {
     appendVolumeText = async () => {},
     compactTaskText = (value = "") => String(value || ""),
     fileExists = async () => false,
     fs = null,
-    legacyTaskQueueRetireAfterMs = 0,
-    legacyTaskQueueRoot = "",
     observerOutputRoot = "",
     pathModule = null,
     shouldHideInspectorEntry = () => false,
@@ -23,6 +40,20 @@ export function createObserverTaskStorageIo(options = {}) {
   } = options;
 
   let taskTraceWriteChain = Promise.resolve();
+  const volumeWriteChains = new Map();
+
+  function enqueueVolumeWrite(filePath, work) {
+    const key = String(filePath || "");
+    const previous = volumeWriteChains.get(key) || Promise.resolve();
+    const next = previous.catch(() => {}).then(work);
+    volumeWriteChains.set(key, next);
+    next.finally(() => {
+      if (volumeWriteChains.get(key) === next) {
+        volumeWriteChains.delete(key);
+      }
+    }).catch(() => {});
+    return next;
+  }
 
   async function listVolumeFiles(rootPath) {
     const entries = [];
@@ -101,94 +132,24 @@ export function createObserverTaskStorageIo(options = {}) {
     return inboxCount + inProgressCount + doneCount + closedCount;
   }
 
-  async function getNewestFileModifiedAt(folderPaths = []) {
-    let newestAt = 0;
-    for (const folderPath of folderPaths) {
-      const entries = await listVolumeFiles(folderPath).catch(() => []);
-      for (const entry of entries) {
-        if (entry.type !== "file" || !entry.path.endsWith(".json")) {
-          continue;
-        }
-        try {
-          const stats = await fs.stat(entry.path);
-          newestAt = Math.max(newestAt, Number(stats.mtimeMs || 0));
-        } catch {
-          // Skip missing or inaccessible files.
-        }
-      }
-    }
-    return newestAt;
-  }
-
   async function writeVolumeText(filePath, content) {
-    await fs.mkdir(pathModule.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, content, "utf8");
-  }
-
-  async function migrateLegacyTaskQueueIfNeeded() {
-    const legacyFolders = {
-      inbox: pathModule.join(legacyTaskQueueRoot, "inbox"),
-      in_progress: pathModule.join(legacyTaskQueueRoot, "in_progress"),
-      done: pathModule.join(legacyTaskQueueRoot, "done"),
-      closed: pathModule.join(legacyTaskQueueRoot, "closed")
-    };
-    const canonicalFolders = {
-      inbox: taskQueueInbox,
-      in_progress: taskQueueInProgress,
-      done: taskQueueDone,
-      closed: taskQueueClosed
-    };
-    const legacyCounts = await Promise.all(Object.values(legacyFolders).map((folder) => countJsonFilesInFolder(folder)));
-    const legacyTotal = legacyCounts.reduce((sum, value) => sum + value, 0);
-    if (!legacyTotal) {
-      return { legacyFound: false, migrated: 0 };
-    }
-    const canonicalTotal = await countCanonicalQueueFiles();
-    if (canonicalTotal > 0) {
-      const newestLegacyAt = await getNewestFileModifiedAt(Object.values(legacyFolders));
-      const retireEligible = newestLegacyAt > 0 && (Date.now() - newestLegacyAt) >= legacyTaskQueueRetireAfterMs;
-      if (!retireEligible) {
-        return {
-          legacyFound: true,
-          migrated: 0,
-          retired: 0,
-          skipped: true,
-          canonicalTotal,
-          legacyTotal,
-          newestLegacyAt
-        };
-      }
-      await fs.rm(legacyTaskQueueRoot, { recursive: true, force: true });
-      return {
-        legacyFound: true,
-        migrated: 0,
-        retired: legacyTotal,
-        skipped: false,
-        canonicalTotal,
-        legacyTotal,
-        newestLegacyAt
-      };
-    }
-    let migrated = 0;
-    for (const [status, legacyFolder] of Object.entries(legacyFolders)) {
-      const entries = await listVolumeFiles(legacyFolder).catch(() => []);
-      const files = entries.filter((entry) => entry.type === "file" && entry.path.endsWith(".json"));
-      for (const entry of files) {
-        const destination = pathModule.join(canonicalFolders[status], pathModule.basename(entry.path));
-        if (await fileExists(destination)) {
-          continue;
+    return enqueueVolumeWrite(filePath, async () => {
+      await fs.mkdir(pathModule.dirname(filePath), { recursive: true });
+      let lastError = null;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try {
+          await fs.writeFile(filePath, content, "utf8");
+          return;
+        } catch (error) {
+          lastError = error;
+          if (!isRetryableVolumeWriteError(error) || attempt >= 11) {
+            break;
+          }
+          await waitForVolumeWriteRetry(attempt);
         }
-        await fs.mkdir(pathModule.dirname(destination), { recursive: true });
-        await fs.rename(entry.path, destination).catch(async () => {
-          const content = await readVolumeFile(entry.path);
-          await writeVolumeText(destination, content);
-          await fs.rm(entry.path, { force: true });
-        });
-        migrated += 1;
       }
-    }
-    await fs.rm(legacyTaskQueueRoot, { recursive: true, force: true }).catch(() => {});
-    return { legacyFound: true, migrated, skipped: false, canonicalTotal, legacyTotal };
+      throw lastError;
+    });
   }
 
   function enqueueTaskTraceWrite(work) {
@@ -448,7 +409,6 @@ export function createObserverTaskStorageIo(options = {}) {
     extractTaskIdFromQueuePath,
     findIndexedTaskById,
     listVolumeFiles,
-    migrateLegacyTaskQueueIfNeeded,
     readTaskHistory,
     readCoreEventSeq,
     readTaskRecordAtPath,

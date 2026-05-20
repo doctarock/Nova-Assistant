@@ -99,7 +99,17 @@ export function createObserverQueueDispatchSelection(context = {}) {
     }
 
     const activeLanes = await getActiveQueueLanes(activeTasks);
+    // Build a set of all task IDs that are still pending or active so we can gate on dependsOnTaskIds
+    const pendingOrActiveTaskIds = new Set([
+      ...tasks.map((t) => String(t.id || "")).filter(Boolean),
+      ...activeTasks.map((t) => String(t.id || "")).filter(Boolean)
+    ]);
     const dispatchable = eligibleDueTasks.filter((entry) => {
+      // Block tasks whose declared dependencies are not yet complete
+      const deps = Array.isArray(entry.dependsOnTaskIds) ? entry.dependsOnTaskIds : [];
+      if (deps.length && deps.some((depId) => pendingOrActiveTaskIds.has(String(depId || "").trim()))) {
+        return false;
+      }
       const projectName = String(entry.projectName || "").trim().toLowerCase();
       if (projectName) {
         const activeProjectTaskCount = activeTasks.filter((task) =>

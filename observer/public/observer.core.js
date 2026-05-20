@@ -117,6 +117,7 @@ const brainAssignmentsListEl = document.getElementById("brainAssignmentsList");
 const customBrainsListEl = document.getElementById("customBrainsList");
 const toolCatalogListEl = document.getElementById("toolCatalogList");
 const installedSkillsListEl = document.getElementById("installedSkillsList");
+const agentSkillsListEl = document.getElementById("agentSkillsList");
 const capabilityRequestsListEl = document.getElementById("capabilityRequestsList");
 const pluginInventoryListEl = document.getElementById("pluginInventoryList");
 const pluginUploadInputEl = document.getElementById("pluginUploadInput");

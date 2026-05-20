@@ -14,40 +14,12 @@
       }
     },
     "roomTextures": {
-      "roomDay": "/assets/textures/room-day.png",
-      "roomNight": "/assets/textures/room-night.png",
-      "desk": "/assets/textures/desk.png",
-      "shelf": "/assets/textures/shelf.png",
-      "walls": "/assets/textures/Rockface grey.png",
-      "floor": "/assets/textures/T_WoodTile_01_basecolor.PNG",
-      "ceiling": "/assets/textures/Cobble grey.png",
+      "walls": "",
+      "floor": "",
+      "ceiling": "",
       "windowFrame": ""
     },
     "propSlots": {
-      "leftShelf": {
-        "model": "",
-        "scale": 1
-      },
-      "rightShelf": {
-        "model": "",
-        "scale": 1
-      },
-      "deskLeft": {
-        "model": "",
-        "scale": 1
-      },
-      "deskRight": {
-        "model": "",
-        "scale": 1
-      },
-      "backWallLeft": {
-        "model": "",
-        "scale": 2.55
-      },
-      "backWallRight": {
-        "model": "/assets/props/SM_Apple_01.glb",
-        "scale": 3
-      },
       "wallLeft": {
         "model": "",
         "scale": 2.15
@@ -58,19 +30,19 @@
       },
       "besideLeft": {
         "model": "",
-        "scale": 1.95
+        "scale": 1
       },
       "besideRight": {
         "model": "",
         "scale": 1
       },
       "outsideLeft": {
-        "model": "/assets/props/SM_Scraggly_Bush_01a.glb",
-        "scale": 3
+        "model": "",
+        "scale": 1
       },
       "outsideRight": {
-        "model": "/assets/props/SM_TeddyBear_01.glb",
-        "scale": 1.2
+        "model": "",
+        "scale": 1
       }
     },
     "voicePreferences": [
@@ -158,7 +130,7 @@
       },
       {
         "id": "worker",
-        "model": "gemma4:26b"
+        "model": "qwen3:14b"
       },
       {
         "id": "helper",
@@ -169,22 +141,6 @@
       "local": {
         "label": "Local Ollama",
         "baseUrl": "http://127.0.0.1:11434"
-      },
-      "lan_73": {
-        "label": "LAN 580",
-        "baseUrl": "http://192.168.1.100:11434"
-      },
-      "lappy": {
-        "label": "Lap GPU",
-        "baseUrl": "http://192.168.1.101:11434"
-      },
-      "lappy_cpu": {
-        "label": "Lap CPU",
-        "baseUrl": "http://192.168.1.101:11435"
-      },
-      "lan_73_p4": {
-        "label": "LAN P4",
-        "baseUrl": "http://192.168.1.100:11435"
       }
     },
     "assignments": {
@@ -212,90 +168,6 @@
         "toolCapable": false,
         "cronCapable": false,
         "description": "Remote CPU planner for triage, specialist selection, and completion review"
-      },
-      {
-        "id": "creative_worker",
-        "label": "Hermes Creative",
-        "kind": "worker",
-        "model": "hermes3",
-        "endpointId": "lan_73",
-        "queueLane": "lan_73_gpu",
-        "specialty": "creative",
-        "toolCapable": false,
-        "cronCapable": false,
-        "description": "Remote creative and ideation specialist"
-      },
-      {
-        "id": "code_worker",
-        "label": "Remote Planner",
-        "kind": "helper",
-        "model": "qwen2.5-coder:7b",
-        "endpointId": "lan_73",
-        "queueLane": "lan_73_gpu",
-        "specialty": "code",
-        "toolCapable": true,
-        "cronCapable": false,
-        "description": "Planner for triage, specialist selection, and completion review"
-      },
-      {
-        "id": "vision_worker",
-        "label": "MiniCPM Vision",
-        "kind": "worker",
-        "model": "minicpm-v",
-        "endpointId": "lan_73",
-        "queueLane": "lan_73_gpu",
-        "specialty": "vision",
-        "toolCapable": true,
-        "cronCapable": false,
-        "description": "Remote vision specialist; registered now, pending full multimodal task pipeline"
-      },
-      {
-        "id": "retrieval_worker",
-        "label": "MXBAI Retrieval",
-        "kind": "helper",
-        "model": "mxbai-embed-large",
-        "endpointId": "lan_73",
-        "queueLane": "lan_73_gpu",
-        "specialty": "retrieval",
-        "toolCapable": false,
-        "cronCapable": false,
-        "description": "Remote embedding brain; registered now, pending retrieval/index pipeline"
-      },
-      {
-        "id": "lappy_gpu_big",
-        "label": "Laptop 9B",
-        "kind": "worker",
-        "model": "qwen3.5:9b",
-        "endpointId": "lappy",
-        "queueLane": "lappy_gpu",
-        "specialty": "code",
-        "toolCapable": true,
-        "cronCapable": true,
-        "description": "Remote CPU routing and task-shaping brain"
-      },
-      {
-        "id": "lan_73_p4",
-        "label": "P4 9B",
-        "kind": "worker",
-        "model": "qwen3.5:9b",
-        "endpointId": "lan_73_p4",
-        "queueLane": "lan_73_p4",
-        "specialty": "general",
-        "toolCapable": true,
-        "cronCapable": true,
-        "description": ""
-      },
-      {
-        "id": "lap_planner",
-        "label": "Gemma Router",
-        "kind": "helper",
-        "model": "functiongemma:latest",
-        "endpointId": "lappy_cpu",
-        "queueLane": "lap_cpu",
-        "specialty": "routing",
-        "toolCapable": false,
-        "cronCapable": false,
-        "description": ""
       }
     ]
   },
@@ -351,7 +223,8 @@
       ],
       "retrieval": [
         "worker"
-      ]
+      ],
+      "fast_worker": []
     },
     "fallbackAttempts": 2
   },

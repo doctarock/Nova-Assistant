@@ -4,6 +4,7 @@ function buildAvailableBrainPayload(brain, context) {
     label: brain.label,
     kind: brain.kind,
     model: brain.model,
+    provider: brain.provider || "ollama",
     endpointId: brain.endpointId || "local",
     queueLane: brain.queueLane || context.getBrainQueueLane(brain),
     specialty: brain.specialty || "",
@@ -50,6 +51,7 @@ export function registerObserverConfigRoutes(context = {}) {
         voicePreferences: Array.isArray(observerConfig?.app?.voicePreferences)
           ? observerConfig.app.voicePreferences.map((value) => String(value)).filter(Boolean)
           : [],
+        quietMode: Boolean(observerConfig?.app?.quietMode),
         trust: context.getAppTrustConfig()
       },
       assets
@@ -137,6 +139,7 @@ export function registerObserverConfigRoutes(context = {}) {
           voicePreferences: Array.isArray(nextApp.voicePreferences)
             ? nextApp.voicePreferences.map((value) => String(value)).map((value) => value.trim()).filter(Boolean)
             : [],
+          quietMode: nextApp.quietMode === true,
           trust: {
             ...nextTrust,
             records: nextTrust.records.map((entry, index) => context.sanitizeTrustRecordForConfig(entry, index)),
@@ -190,6 +193,7 @@ export function registerObserverConfigRoutes(context = {}) {
       );
       serializedEndpoints.local = {
         label: String(serializedEndpoints.local?.label || "Local Ollama"),
+        provider: "ollama",
         baseUrl: context.localOllamaBaseUrl
       };
       const knownEndpointIds = new Set(Object.keys(serializedEndpoints));
@@ -239,7 +243,8 @@ export function registerObserverConfigRoutes(context = {}) {
           background: sanitizeRouteList(nextRouting?.specialistMap?.background),
           creative: sanitizeRouteList(nextRouting?.specialistMap?.creative),
           vision: sanitizeRouteList(nextRouting?.specialistMap?.vision),
-          retrieval: sanitizeRouteList(nextRouting?.specialistMap?.retrieval)
+          retrieval: sanitizeRouteList(nextRouting?.specialistMap?.retrieval),
+          fast_worker: sanitizeRouteList(nextRouting?.specialistMap?.fast_worker)
         },
         fallbackAttempts: Math.max(0, Math.min(Number(nextRouting?.fallbackAttempts || 0), 4))
       };
