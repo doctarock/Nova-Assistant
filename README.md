@@ -2,6 +2,7 @@
 
 ## Documentation
 
+- [Installation](docs/INSTALLATION.md)
 - [Plugin System Developer Guide](docs/PLUGIN-SYSTEM.md)
 - [Semantic Compression Implementation Status](docs/IMPLEMENTATION_STATUS.md)
 - [Compression Quick Reference](docs/COMPRESSION_QUICK_REFERENCE.md)
