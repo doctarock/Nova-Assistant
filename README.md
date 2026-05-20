@@ -4,10 +4,6 @@
 
 - [Installation](docs/INSTALLATION.md)
 - [Plugin System Developer Guide](docs/PLUGIN-SYSTEM.md)
-- [Semantic Compression Implementation Status](docs/IMPLEMENTATION_STATUS.md)
-- [Compression Quick Reference](docs/COMPRESSION_QUICK_REFERENCE.md)
-- [Semantic Compression Quick Start](docs/SEMANTIC_COMPRESSION_QUICK_START.md)
-- [Tool Loop Compression Guide](docs/TOOL_LOOP_COMPRESSION_GUIDE.md)
 - [Changelog](CHANGELOG.md)
 
 
