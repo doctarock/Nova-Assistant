@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-05-20 1.3.0
+
+### Added
+- Added modular Observer browser bundles for config, plugins, regressions, secrets, speech, and state browsing.
+- Added Agent Skills (Claude skills wrapper) support with API routes, Capabilities UI, worker tools, and prompt guidance for running local model skills through Dogpile (https://github.com/bubstack/dogpile).
+- Added first-party Dreaming, Session Memory, and Task Lifecycle plugins.
+- Added plugin runtime services for prompt review, task lifecycle access, plugin tool catalogs, and queue/intake lifecycle hooks.
+- Added OpenAI-compatible provider support alongside Ollama runtime handling, including provider endpoint normalization and chat completions coverage.
+- Added installation notes in `docs/INSTALLATION.md`.
+- Added regression and unit coverage for native conversational responses, todo clarification, provider routing, and project-cycle prompt boundaries.
+
+### Changed
+- Split large server and runtime files into focused services for admin security, config loading, Ollama runtime, task lifecycle, workspace file helpers, state reset, and runtime accessors.
+- Improved native/direct replies for greetings, thanks, knock-knock jokes, casual wellbeing prompts, help requests, and incomplete todo-add requests.
+- Improved worker prompting with Agent Skills guidance, more precise `internalJobType` handling, and tighter tool selection for recreation and project-cycle work.
+- Improved plugin system internals with richer capability/hook metadata, material hook tracing, and developer-tools panel updates.
+- Updated the Observer UI styling toward a darker glass-style theme and moved voice status controls into the composer area.
+- Simplified the default observer config by removing old LAN/laptop endpoints and switching the default worker model to `qwen3:14b`.
+
+### Fixed
+- Prevented incidental `PROJECT-TODO.md` mentions in non-project tasks from triggering project-cycle worker instructions.
+- Fixed recreation jobs so they only complete successfully after daily personal notes are actually updated.
+- Fixed todo-add handling so requests missing the item text ask for clarification instead of falling through to summary behavior.
+- Fixed provider runtime behavior so OpenAI-compatible brains use `/chat/completions` instead of Ollama generate endpoints.
+
 ## 2026-05-06 1.2.1
 
 ### Added
