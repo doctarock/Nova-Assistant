@@ -40,14 +40,14 @@ If `npm install` works in your shell, that is fine too. `npm.cmd` avoids PowerSh
 Start Qdrant from the repository root:
 
 ```powershell
-cd C:\AI\repositories\DerpyClaw\local-ai-home-assistant-main
+cd [working directory]
 docker compose up -d qdrant
 ```
 
 Start the observer:
 
 ```powershell
-cd C:\AI\repositories\DerpyClaw\local-ai-home-assistant-main\observer
+cd [working directory]\observer
 $env:QDRANT_URL = "http://127.0.0.1:6333"
 node server.js
 ```
@@ -72,9 +72,9 @@ To run the observer in the background and write logs beside the app:
 ```powershell
 Start-Process -FilePath node `
   -ArgumentList 'server.js' `
-  -WorkingDirectory 'C:\AI\repositories\DerpyClaw\local-ai-home-assistant-main\observer' `
-  -RedirectStandardOutput 'C:\AI\repositories\DerpyClaw\local-ai-home-assistant-main\observer\observer.out.log' `
-  -RedirectStandardError 'C:\AI\repositories\DerpyClaw\local-ai-home-assistant-main\observer\observer.err.log' `
+  -WorkingDirectory '[working directory]' `
+  -RedirectStandardOutput '[working directory]\observer\observer.out.log' `
+  -RedirectStandardError '[working directory]\observer\observer.err.log' `
   -WindowStyle Hidden
 ```
 
@@ -109,13 +109,4 @@ The default config references models such as:
 - `gemma3:1b`
 
 Install or edit these in `observer/observer.config.json` to match your local Ollama setup.
-
-## Notes From This Install
-
-- The UI responded with HTTP `200 OK` at `http://127.0.0.1:3220/`.
-- Qdrant started as container `nova-qdrant` and exposed `127.0.0.1:6333-6334`.
-- The observer logs showed warnings for missing optional plugins:
-  - `task-lifecycle-plugin.js`
-  - `session-memory-plugin.js`
-- The app continued running despite those plugin warnings.
 
